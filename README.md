@@ -1,6 +1,6 @@
 # parley-sim
 
-Measure whether your agent's behavior against scripted counterparts predicts its
-behavior against adaptive ones.
+Adaptive user simulation for LLM agents. Test your agent against users that
+adapt to what it does, not only scripted personas, and measure the gap.
 
 Status: pre-release.

@@ -8,7 +8,7 @@ import os
 import time
 from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from parley_sim.core.protocol import JSON, MalformedOutput, Policy, TextInterface
 from parley_sim.runtime.episode import DecisionRequest, DecisionResult
@@ -30,9 +30,20 @@ class ModelSpec(BaseModel):
     base_url: str | None = None
     api_key_env: str | None = None
     temperature: float | None = None
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
     max_tokens: int = 4096
     timeout_s: float = 120.0
     provider_params: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _anthropic_has_no_sampling(self) -> "ModelSpec":
+        if self.provider == "anthropic" and self.temperature is not None:
+            raise ValueError("the Anthropic API no longer accepts temperature; remove it")
+        return self
+
+
+class ProviderRefusal(Exception):
+    """The provider declined to answer (a safety stop, not malformed output)."""
 
 
 class ProviderClient(Protocol):
@@ -41,6 +52,11 @@ class ProviderClient(Protocol):
 
 
 class AnthropicClient:
+    """Structured outputs (`output_config.format`) rather than a forced tool
+    call: current models reject forced `tool_choice`. No refusal fallback is
+    configured, because a silent swap to another model would contaminate an
+    evaluation of this one; a refusal is recorded as a seat strike instead."""
+
     def __init__(self, spec: ModelSpec):
         import anthropic
         self.spec = spec
@@ -48,18 +64,21 @@ class AnthropicClient:
             api_key=os.environ.get(spec.api_key_env or "ANTHROPIC_API_KEY"))
 
     async def complete(self, *, system: str, user: str, schema: JSON) -> tuple[Any, JSON]:
+        output_config: dict[str, Any] = {"format": {"type": "json_schema", "schema": schema}}
+        if self.spec.effort is not None:
+            output_config["effort"] = self.spec.effort
         kwargs: dict[str, Any] = {
             "model": self.spec.model, "max_tokens": self.spec.max_tokens, "system": system,
-            "messages": [{"role": "user", "content": user}],
-            "tools": [{"name": "take_turn", "description": "Submit your turn.",
-                       "input_schema": schema}],
-            "tool_choice": {"type": "tool", "name": "take_turn"},
+            "messages": [{"role": "user", "content": user}], "output_config": output_config,
         }
         if self.spec.temperature is not None:
             kwargs["temperature"] = self.spec.temperature
         kwargs.update(self.spec.provider_params or {})
         resp = await self._client.messages.create(**kwargs)
-        payload = next((b.input for b in resp.content if b.type == "tool_use"), None)
+        if resp.stop_reason == "refusal":
+            details = getattr(resp, "stop_details", None)
+            raise ProviderRefusal(getattr(details, "category", None) or "refusal")
+        payload = next((b.text for b in resp.content if b.type == "text"), None)
         thinking = [b.thinking for b in resp.content if b.type == "thinking"]
         return payload, {
             "served_model": resp.model, "stop_reason": resp.stop_reason,
@@ -158,6 +177,8 @@ class ModelSeat:
                     timeout=self.spec.timeout_s)
             except asyncio.TimeoutError:
                 return self._result(req, attempts, strike="timeout")
+            except ProviderRefusal as exc:
+                return self._result(req, attempts, strike="refusal", detail=str(exc))
             except Exception as exc:  # provider/network errors are a seat failure, not a crash
                 return self._result(req, attempts, strike="exception", detail=repr(exc))
             attempts.append({**raw, "payload": payload,

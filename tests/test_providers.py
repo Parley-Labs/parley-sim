@@ -18,21 +18,41 @@ class Recorder:
         return self.response
 
 
-def test_anthropic_forces_tool_and_omits_null_temperature(monkeypatch):
+def test_anthropic_uses_structured_output_and_omits_null_temperature(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
-    client = AnthropicClient(ModelSpec(name="a", provider="anthropic", model="m",
-                                       provider_params={"top_k": 5}))
-    resp = NS(model="m-served", stop_reason="tool_use", usage=NS(input_tokens=7, output_tokens=3),
+    client = AnthropicClient(ModelSpec(name="a", provider="anthropic", model="m", effort="low",
+                                       provider_params={"metadata": {"user_id": "u"}}))
+    resp = NS(model="m-served", stop_reason="end_turn", usage=NS(input_tokens=7, output_tokens=3),
               content=[NS(type="thinking", thinking="hmm"),
-                       NS(type="tool_use", input={"move": {"type": "none"}})])
+                       NS(type="text", text='{"move": {"type": "none"}}')])
     rec = Recorder(resp)
     client._client = NS(messages=rec)
     payload, raw = asyncio.run(client.complete(system="s", user="u", schema={"type": "object"}))
-    assert payload == {"move": {"type": "none"}}
+    assert payload == '{"move": {"type": "none"}}'
     assert raw["usage"] == {"input_tokens": 7, "output_tokens": 3}
     assert raw["provider_reasoning"] == "hmm"
-    assert "temperature" not in rec.kwargs and rec.kwargs["top_k"] == 5
-    assert rec.kwargs["tool_choice"] == {"type": "tool", "name": "take_turn"}
+    assert "temperature" not in rec.kwargs and "tool_choice" not in rec.kwargs
+    assert rec.kwargs["output_config"] == {"format": {"type": "json_schema",
+                                                      "schema": {"type": "object"}},
+                                           "effort": "low"}
+    assert rec.kwargs["metadata"] == {"user_id": "u"}
+
+
+def test_anthropic_refusal_becomes_a_refusal_strike(monkeypatch):
+    from parley_sim.drivers.models import ModelSeat
+    from parley_sim.envs.support_desk import SupportDesk, SupportDeskText
+    from parley_sim.runtime import DecisionRequest
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    spec = ModelSpec(name="a", provider="anthropic", model="m")
+    client = AnthropicClient(spec)
+    client._client = NS(messages=Recorder(NS(stop_reason="refusal", content=[],
+                                             stop_details=NS(category="cyber"))))
+    env = SupportDesk()
+    state = env.initial_state(env.generate(0, {}))
+    req = DecisionRequest("0:customer", "customer", 0, env.observe(state, "customer"), {})
+    res = asyncio.run(ModelSeat(spec, SupportDeskText(), client).decide(req))
+    assert res.strike == "refusal" and res.detail == "cyber"
 
 
 @pytest.mark.parametrize("provider,tokens_key", [("openai", "max_completion_tokens"),
