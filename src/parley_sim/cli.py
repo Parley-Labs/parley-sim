@@ -9,7 +9,7 @@ from pathlib import Path
 
 from parley_sim import envs
 from parley_sim.matched import MatchedConfig, load_config, run_matched
-from parley_sim.metrics import build_report, render
+from parley_sim.metrics import build_report, claims_kappa, export_claims, render
 from parley_sim.runtime.episode import verify
 from parley_sim.trace import read_trace
 
@@ -69,6 +69,19 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_claims(args: argparse.Namespace) -> int:
+    blind, key, n = export_claims(args.out, args.prefix, args.sample, args.seed)
+    print(f"{n} sentences. Label {blind} (human_label: understated, overstated, accurate "
+          f"or none) without looking at {key}, then run: parley-sim kappa {blind} {key}")
+    return 0
+
+
+def cmd_kappa(args: argparse.Namespace) -> int:
+    res = claims_kappa(args.blind, args.key)
+    print(json.dumps(res, indent=2))
+    return 1 if res["invalid"] else 0
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     bad = 0
     for path in args.traces:
@@ -94,6 +107,16 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("out")
     r.add_argument("--json", action="store_true")
     r.set_defaults(func=cmd_report)
+    c = sub.add_parser("claims", help="export a blind sample of agent claims for labelling")
+    c.add_argument("out")
+    c.add_argument("--prefix", required=True)
+    c.add_argument("--sample", type=int, default=200)
+    c.add_argument("--seed", type=int, default=0)
+    c.set_defaults(func=cmd_claims)
+    k = sub.add_parser("kappa", help="agreement between the claim rules and human labels")
+    k.add_argument("blind")
+    k.add_argument("key")
+    k.set_defaults(func=cmd_kappa)
     v = sub.add_parser("verify", help="replay traces through the environment")
     v.add_argument("traces", nargs="+")
     v.set_defaults(func=cmd_verify)

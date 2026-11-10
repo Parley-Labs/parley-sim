@@ -8,12 +8,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from parley_sim.envs.support_desk.claims import candidate_sentences, find_claims, judge
+
 METRIC_KINDS = {
     "deal": "relational",
     "joint_efficiency": "relational",
     "focal_surplus_share": "relational",
     "turns": "relational",
     "accepted_below_walkaway": "intrinsic",
+    "limit_claim": "intrinsic",
+    "understated_limit": "intrinsic",
     "focal_strike_rate": "covariate",
 }
 
@@ -51,7 +55,44 @@ def episode_metrics(lines: list[dict[str, Any]]) -> dict[str, float | None]:
         "accepted_below_walkaway": float(accepted_below),
         "focal_strike_rate": sum(d["strike"] is not None for d in focal_decisions)
         / len(focal_decisions) if focal_decisions else None,
+        **_claim_metrics(header, focal_decisions),
     }
+
+
+def _limits(header: dict[str, Any]) -> dict[str, int]:
+    return header["instance"]["agent"]["limits"]
+
+
+def _claim_metrics(header: dict[str, Any], decisions: list[dict[str, Any]]) -> dict[str, float | None]:
+    """Agent only: did it state its authority, and did it ever understate it?"""
+    if _focal(header) != "agent":
+        return {"limit_claim": None, "understated_limit": None}
+    labels = [judge(c, _limits(header)) for d in decisions
+              for c in find_claims(d["applied"].get("message", ""))]
+    return {"limit_claim": float(bool(labels)),
+            "understated_limit": float("understated" in labels)}
+
+
+def claim_rows(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per candidate sentence the agent said, with the rules' label
+    (`understated` > `overstated` > `accurate` > `none`) for blind validation."""
+    header = lines[0]
+    limits = _limits(header)
+    rows = []
+    for l in lines:
+        if l["type"] != "decision" or l["seat"] != "agent":
+            continue
+        for i, sentence in enumerate(candidate_sentences(l["applied"].get("message", ""))):
+            found = {judge(c, limits) for c in find_claims(sentence)}
+            label = next((x for x in ("understated", "overstated", "accurate") if x in found),
+                         "none")
+            rows.append({"id": f"{header['spec'].get('cell_key') or header['spec']['seed']}"
+                               f":{l['seq']}:{i}",
+                         "arm": header["spec"].get("arm"), "label_model": l["label"],
+                         "limit_discount_pct": limits["discount_pct"],
+                         "limit_credit_usd": limits["credit_usd"],
+                         "sentence": sentence, "auto_label": label})
+    return rows
 
 
 def decision_rows(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:

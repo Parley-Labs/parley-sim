@@ -135,3 +135,79 @@ def render(report: dict[str, Any]) -> str:
                                f"| {v['accepted'] / v['n']:.2f} |")
         out.append("")
     return "\n".join(out)
+
+
+CLAIM_LABELS = ("understated", "overstated", "accurate", "none")
+
+
+def cohen_kappa(a: list[str], b: list[str]) -> float:
+    n = len(a)
+    if n == 0:
+        return float("nan")
+    cats = sorted(set(a) | set(b))
+    observed = sum(x == y for x, y in zip(a, b)) / n
+    expected = sum((a.count(c) / n) * (b.count(c) / n) for c in cats)
+    return 1.0 if expected == 1 else (observed - expected) / (1 - expected)
+
+
+def export_claims(out_dir: str | Path, prefix: str | Path, sample: int = 200,
+                  seed: int = 0) -> tuple[Path, Path, int]:
+    """Write `<prefix>.blind.csv` (sentences and true limits, empty
+    `human_label`, no rule output) and `<prefix>.key.csv` (the rules' labels).
+    Up to half the sample is sentences the rules flagged, the rest unflagged
+    ones, so a rare label still gets enough rows for a stable kappa."""
+    import csv
+    out = Path(out_dir)
+    run, cells = load_manifest(out)
+    entry = envs.get(run["config"]["env"])
+    if entry.claim_rows is None:
+        raise ValueError(f"env {run['config']['env']!r} has no claim classifier")
+    rows = [r for c in cells if c["status"] == "done"
+            for r in entry.claim_rows(read_trace(out / c["trace"]))]
+    rng = random.Random(seed)
+    flagged = [r for r in rows if r["auto_label"] != "none"]
+    plain = [r for r in rows if r["auto_label"] == "none"]
+    rng.shuffle(flagged)
+    rng.shuffle(plain)
+    take = flagged[: sample // 2]
+    take += plain[: sample - len(take)]
+    rng.shuffle(take)
+    prefix = Path(prefix)
+    prefix.parent.mkdir(parents=True, exist_ok=True)
+    blind, key = prefix.with_suffix(".blind.csv"), prefix.with_suffix(".key.csv")
+    with blind.open("w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["id", "limit_discount_pct", "limit_credit_usd", "sentence", "human_label"])
+        for r in take:
+            w.writerow([r["id"], r["limit_discount_pct"], r["limit_credit_usd"], r["sentence"], ""])
+    with key.open("w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["id", "auto_label", "arm", "label_model"])
+        for r in take:
+            w.writerow([r["id"], r["auto_label"], r["arm"], r["label_model"]])
+    return blind, key, len(take)
+
+
+def claims_kappa(blind_csv: str | Path, key_csv: str | Path) -> dict[str, Any]:
+    import csv
+    with Path(key_csv).open() as f:
+        auto = {r["id"]: r["auto_label"] for r in csv.DictReader(f)}
+    pairs, invalid = [], []
+    with Path(blind_csv).open() as f:
+        for r in csv.DictReader(f):
+            human = (r.get("human_label") or "").strip().lower()
+            if not human:
+                continue
+            if human not in CLAIM_LABELS or r["id"] not in auto:
+                invalid.append(r["id"])
+                continue
+            pairs.append((auto[r["id"]], human))
+    a, h = [p[0] for p in pairs], [p[1] for p in pairs]
+    confusion = {x: {y: sum(1 for p in pairs if p == (x, y)) for y in CLAIM_LABELS}
+                 for x in CLAIM_LABELS}
+    return {"n": len(pairs), "invalid": invalid,
+            "kappa_understated": cohen_kappa(["understated" if x == "understated" else "other"
+                                              for x in a],
+                                             ["understated" if x == "understated" else "other"
+                                              for x in h]),
+            "kappa_all": cohen_kappa(a, h), "confusion_auto_by_human": confusion}
