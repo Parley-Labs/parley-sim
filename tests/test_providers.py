@@ -72,3 +72,29 @@ def test_openai_paths(monkeypatch, provider, tokens_key):
     assert raw["usage"] == {"input_tokens": 11, "output_tokens": 4}
     assert rec.kwargs[tokens_key] == 4096 and rec.kwargs["temperature"] == 0.2
     assert raw["provider_reasoning"] == "why"
+
+
+def test_openrouter_effort_merges_into_extra_body_and_cost_is_recorded(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "placeholder")
+    routing = {"provider": {"order": ["Anthropic"], "allow_fallbacks": False},
+               "reasoning": {"exclude": False}}
+    client = OpenAIClient(ModelSpec(name="o", provider="openai_compat", model="m", effort="low",
+                                    base_url="https://openrouter.ai/api/v1",
+                                    provider_params={"extra_body": routing}))
+    msg = NS(content="{}", reasoning=None)
+    resp = NS(model="m", choices=[NS(message=msg, finish_reason="stop")],
+              usage=NS(prompt_tokens=1, completion_tokens=2, cost=0.0123))
+    rec = Recorder(resp)
+    client._client = NS(chat=NS(completions=rec))
+    _, raw = asyncio.run(client.complete(system="s", user="u", schema={}))
+    assert rec.kwargs["extra_body"]["reasoning"] == {"exclude": False, "effort": "low"}
+    assert rec.kwargs["extra_body"]["provider"] == routing["provider"]
+    assert "reasoning_effort" not in rec.kwargs
+    assert raw["usage"]["cost_usd"] == 0.0123
+
+
+def test_missing_gateway_key_never_falls_back_to_openai_key(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "secret")
+    with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
+        OpenAIClient(ModelSpec(name="o", provider="openai_compat", model="m"))

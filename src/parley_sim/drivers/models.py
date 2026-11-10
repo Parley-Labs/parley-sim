@@ -95,14 +95,21 @@ class OpenAIClient:
     def __init__(self, spec: ModelSpec):
         from openai import AsyncOpenAI
         self.spec = spec
-        default_env = "OPENAI_API_KEY" if spec.provider == "openai" else "OPENROUTER_API_KEY"
-        self._client = AsyncOpenAI(base_url=spec.base_url,
-                                   api_key=os.environ.get(spec.api_key_env or default_env))
+        env = spec.api_key_env or ("OPENAI_API_KEY" if spec.provider == "openai"
+                                   else "OPENROUTER_API_KEY")
+        key = os.environ.get(env)
+        if not key:
+            # Never let the SDK fall back to OPENAI_API_KEY: that would send an
+            # OpenAI secret to whatever gateway base_url points at. Behind a
+            # proxy that injects the real key, any placeholder value works.
+            raise RuntimeError(f"{env} is not set")
+        self._client = AsyncOpenAI(base_url=spec.base_url, api_key=key)
 
     async def complete(self, *, system: str, user: str, schema: JSON) -> tuple[Any, JSON]:
-        tokens_key = "max_completion_tokens" if self.spec.provider == "openai" else "max_tokens"
+        compat = self.spec.provider != "openai"
         kwargs: dict[str, Any] = {
-            "model": self.spec.model, tokens_key: self.spec.max_tokens,
+            "model": self.spec.model,
+            ("max_tokens" if compat else "max_completion_tokens"): self.spec.max_tokens,
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": user}],
             "response_format": {"type": "json_schema",
@@ -110,14 +117,24 @@ class OpenAIClient:
         }
         if self.spec.temperature is not None:
             kwargs["temperature"] = self.spec.temperature
-        kwargs.update(self.spec.provider_params or {})
+        params = dict(self.spec.provider_params or {})
+        if self.spec.effort is not None:
+            if compat:  # OpenRouter's unified reasoning control
+                extra = dict(params.get("extra_body") or {})
+                extra["reasoning"] = {**extra.get("reasoning", {}), "effort": self.spec.effort}
+                params["extra_body"] = extra
+            else:
+                kwargs["reasoning_effort"] = self.spec.effort
+        kwargs.update(params)
         resp = await self._client.chat.completions.create(**kwargs)
         msg = resp.choices[0].message
         usage = resp.usage
+        cost = getattr(usage, "cost", None)  # OpenRouter, when usage accounting is on
         return msg.content, {
             "served_model": resp.model, "stop_reason": resp.choices[0].finish_reason,
             "usage": {"input_tokens": getattr(usage, "prompt_tokens", 0) or 0,
-                      "output_tokens": getattr(usage, "completion_tokens", 0) or 0},
+                      "output_tokens": getattr(usage, "completion_tokens", 0) or 0,
+                      **({"cost_usd": float(cost)} if cost is not None else {})},
             "provider_reasoning": getattr(msg, "reasoning", None)
             or getattr(msg, "reasoning_content", None),
         }
@@ -132,8 +149,10 @@ def build_client(spec: ModelSpec) -> ProviderClient:
 
 
 def _usage_raw(spec: ModelSpec, text: TextInterface, attempts: list[JSON]) -> JSON:
-    usage = {k: sum(a.get("usage", {}).get(k, 0) for a in attempts)
-             for k in ("input_tokens", "output_tokens")}
+    usage: JSON = {k: sum(a.get("usage", {}).get(k, 0) for a in attempts)
+                   for k in ("input_tokens", "output_tokens")}
+    if any("cost_usd" in a.get("usage", {}) for a in attempts):
+        usage["cost_usd"] = sum(a.get("usage", {}).get("cost_usd", 0.0) for a in attempts)
     return {"model": spec.name, "model_id": spec.model, "prompt_version": text.prompt_version,
             "usage": usage, "attempts": attempts}
 

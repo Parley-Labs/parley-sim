@@ -97,7 +97,10 @@ def build_report(out_dir: str | Path) -> dict[str, Any]:
             b = table.setdefault(row["bin"], {"n": 0, "accepted": 0})
             b["n"] += 1
             b["accepted"] += row["accepted"]
+    spend = {k: sum((c.get("usage") or {}).get(k, 0) for c in cells)
+             for k in ("input_tokens", "output_tokens", "cost_usd")}
     return {"run_id": run["run_id"], "env": run["config"]["env"], "cells": dict(status_counts),
+            "spend": spend,
             "metrics": metrics, "acceptance_by_offer_quality": acceptance}
 
 
@@ -109,7 +112,9 @@ def _fmt(v: Any) -> str:
 
 def render(report: dict[str, Any]) -> str:
     out = [f"# {report['run_id']} ({report['env']})", "",
-           "Cells: " + ", ".join(f"{k}={v}" for k, v in sorted(report["cells"].items())), ""]
+           "Cells: " + ", ".join(f"{k}={v}" for k, v in sorted(report["cells"].items())),
+           "Spend: {input_tokens:,} input + {output_tokens:,} output tokens, "
+           "${cost_usd:.2f} reported by provider".format(**report["spend"]), ""]
     for focal, metrics in report["metrics"].items():
         out += [f"## {focal}", "",
                 "| metric | kind | SOC | AOC | AOC-SOC [95% CI] | noise floor | n | clears |",

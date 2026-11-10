@@ -1,0 +1,29 @@
+# 2-seed check of the API path and real cost per call before the pilot.
+# Claude via OpenRouter, pinned to Anthropic as the upstream (BYOK), no fallback.
+run_id: canary-sd1
+env: support_desk
+seeds: "1000:1002"
+lineup:
+  - name: opus
+    provider: openai_compat
+    model: anthropic/claude-opus-5.5
+    base_url: https://openrouter.ai/api/v1
+    effort: low
+    max_tokens: 8192
+    provider_params: &openrouter
+      extra_body:
+        provider: {order: [Anthropic], allow_fallbacks: false}
+        usage: {include: true}
+  - name: sonnet
+    provider: openai_compat
+    model: anthropic/claude-sonnet-5.5
+    base_url: https://openrouter.ai/api/v1
+    effort: low
+    max_tokens: 8192
+    provider_params: *openrouter
+focal_models: [opus, sonnet]
+scripted_counterparts: [hardliner, reasonable, conceder]
+adaptive_counterparts: [opus, sonnet]
+self_null_replicates: 1
+concurrency: 4
+max_total_tokens: 300000

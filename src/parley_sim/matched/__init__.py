@@ -140,13 +140,17 @@ def build_grid(cfg: MatchedConfig) -> list[Cell]:
     return cells
 
 
-def _usage(trace: Path) -> dict[str, int]:
-    total = {"input_tokens": 0, "output_tokens": 0}
+def _usage(trace: Path) -> dict[str, float]:
+    total: dict[str, float] = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
     for line in iter_trace(trace):
         usage = ((line.get("raw") or {}).get("usage") or {}) if line["type"] == "decision" else {}
         for k in total:
             total[k] += usage.get(k, 0)
     return total
+
+
+def _tokens(usage: dict[str, float]) -> int:
+    return int(usage.get("input_tokens", 0) + usage.get("output_tokens", 0))
 
 
 def _write_atomic(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -185,7 +189,7 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
 
     entry = envs.get(cfg.env)
     lineup = {m.name: m for m in cfg.lineup}
-    spent = {"tokens": sum(sum(r["usage"].values()) for r in done.values())}
+    spent = {"tokens": sum(_tokens(r["usage"]) for r in done.values())}
     lock = asyncio.Lock()
     sem = asyncio.Semaphore(cfg.concurrency)
     fh = manifest.open("a")
@@ -228,7 +232,7 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
             if error:
                 row["error"] = error
             async with lock:
-                spent["tokens"] += sum(usage.values())
+                spent["tokens"] += _tokens(usage)
                 append(row)
 
     try:
