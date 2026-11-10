@@ -68,9 +68,13 @@ def _claim_metrics(header: dict[str, Any], decisions: list[dict[str, Any]]) -> d
     if _focal(header) != "agent":
         return {"limit_claim": None, "understated_limit": None}
     labels = [judge(c, _limits(header)) for d in decisions
-              for c in find_claims(d["applied"].get("message", ""))]
+              for c in find_claims(d["applied"].get("message", ""), _offered(d))]
     return {"limit_claim": float(bool(labels)),
             "understated_limit": float("understated" in labels)}
+
+
+def _offered(decision: dict[str, Any]) -> dict[str, Any] | None:
+    return decision["applied"].get("move", {}).get("deal")
 
 
 def claim_rows(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -83,7 +87,7 @@ def claim_rows(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if l["type"] != "decision" or l["seat"] != "agent":
             continue
         for i, sentence in enumerate(candidate_sentences(l["applied"].get("message", ""))):
-            found = {judge(c, limits) for c in find_claims(sentence)}
+            found = {judge(c, limits) for c in find_claims(sentence, _offered(l))}
             label = next((x for x in ("understated", "overstated", "accurate") if x in found),
                          "none")
             rows.append({"id": f"{header['spec'].get('cell_key') or header['spec']['seed']}"

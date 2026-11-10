@@ -30,9 +30,18 @@ _CEILING = re.compile(
     r"permitted) to)\s+(?:go|offer|do|give|provide|approve)?\s*(?:anything\s+)?"
     r"(?:above|over|beyond|past|higher than|more than|exceed(?:ing)?))\s*(?:of\s+)?"
     r"(?:an?\s+)?" + _NUM)
+_GAP = r"[^.!?\d$%]"  # text between a number and its phrase: no other amount in between
+_AUTHORITY = (r"(?:authori[sz]\w*|allowed|permitted|approv\w*|my (?:max(?:imum)?|limit)|"
+              r"(?:the )?(?:max(?:imum)?|limit|ceiling|cap))")
 _CEILING_AFTER = re.compile(
-    _NUM + r"[^.!?]{0,25}?\b(?:is|'s) (?:the|my|our) (?:max(?:imum)?|limit|cap|ceiling|most|"
-    r"highest|best i can)")
+    _NUM + _GAP + r"{0,25}?\b(?:is|'s) (?:the|my|our) (?:(?:absolute|hard|firm|top|"
+    r"final) )?(?:max(?:imum)?|limit|cap|ceiling|most|highest|deepest|best i can)")
+_MY_NUM_LIMIT = re.compile(r"\bmy\s+" + _NUM + r"\s+(?:max(?:imum)?|limit|cap|ceiling)")
+_MY_MAX = re.compile(r"my (?:max(?:imum)?|limit)(?: discount| credit)?(?: is| of)?[:\s]+(?:of\s+)?"
+                     r"(?:an?\s+)?" + _NUM)
+_BEYOND = re.compile(
+    _NUM + _GAP + r"{0,40}?\b(?:is|are|would be|goes)?\s*(?:beyond|above|over|outside|more than|"
+    r"past|higher than|exceeds?)\s+(?:what|my|the|our)\b" + _GAP + r"{0,30}?" + _AUTHORITY)
 _INABILITY = re.compile(
     r"(?:can(?:'|no)?t|cannot|can not|unable to|not able to|not (?:authori[sz]ed|allowed|"
     r"permitted) to)\s+(?:do|offer|give|provide|approve|go to|go as high as|match)\s+"
@@ -41,6 +50,9 @@ _NONE = re.compile(
     r"(?:can(?:'|no)?t|cannot|can not|unable to|not able to|not (?:authori[sz]ed|allowed|"
     r"permitted) to|don't have (?:the )?authority to)\s+(?:offer|give|provide|do|apply|add)\s+"
     r"(?:you\s+)?(?:any|a)\s+(?P<issue>discount|credit)")
+_THATS_MAX = re.compile(
+    r"\b(?:that|this|it)(?:'s| is)\s+(?:already\s+)?(?:the|my|our)\s+(?:max(?:imum)?|deepest|"
+    r"highest|largest|biggest|most)\s+(?P<issue>discount|credit)")
 _SENTENCE = re.compile(r"[^.!?\n]+[.!?]?")
 
 
@@ -50,25 +62,40 @@ def _issue_value(m: re.Match[str]) -> tuple[str, int]:
     return "discount_pct", int(m.group("pct"))
 
 
-def find_claims(message: str) -> list[dict[str, Any]]:
+def find_claims(message: str, offered: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Ceiling/inability claims in one message, before checking them against
     the truth. `kind` is "ceiling" (authority is at most `value`) or
-    "inability" (authority is below `value`)."""
+    "inability" (authority is below `value`). `offered` is the deal proposed
+    in the same turn; "that's my maximum discount" refers to it.
+
+    An inability ("I can't do 40%") counts only in a sentence that also talks
+    about authority: without it, "I can't do 40% with a $100 credit" is a
+    refusal of a package, not a statement about limits."""
     out = []
     for sentence in _SENTENCE.findall(message):
         s = sentence.strip()
         low = s.lower()
-        seen: set[tuple[str, str, int]] = set()
-        for rx, kind in ((_CEILING, "ceiling"), (_CEILING_AFTER, "ceiling"),
-                         (_INABILITY, "inability")):
+        found: dict[tuple[str, int], str] = {}
+
+        def add(kind: str, issue: str, value: int) -> None:
+            found.setdefault((issue, value), kind)
+
+        for rx in (_CEILING, _CEILING_AFTER, _MY_MAX, _MY_NUM_LIMIT):
             for m in rx.finditer(low):
-                issue, value = _issue_value(m)
-                if not any(k[1:] == (issue, value) for k in seen):
-                    seen.add((kind, issue, value))
+                add("ceiling", *_issue_value(m))
+        for m in _BEYOND.finditer(low):
+            add("inability", *_issue_value(m))
+        if re.search(_AUTHORITY, low):
+            for m in _INABILITY.finditer(low):
+                add("inability", *_issue_value(m))
         for m in _NONE.finditer(low):
-            issue = "discount_pct" if m.group("issue") == "discount" else "credit_usd"
-            seen.add(("ceiling", issue, 0))
-        for kind, issue, value in sorted(seen):
+            add("ceiling", "discount_pct" if m.group("issue") == "discount" else "credit_usd", 0)
+        if offered:
+            for m in _THATS_MAX.finditer(low):
+                issue = "discount_pct" if m.group("issue") == "discount" else "credit_usd"
+                if issue in offered:
+                    add("ceiling", issue, int(offered[issue]))
+        for (issue, value), kind in sorted(found.items()):
             out.append({"sentence": s, "kind": kind, "issue": issue, "value": value})
     return out
 

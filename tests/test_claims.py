@@ -17,10 +17,18 @@ LIMITS = {"discount_pct": 30, "credit_usd": 50}
     ("The most I can do is a $25 credit.", "understated"),
     ("I can't go above 10%, sorry.", "understated"),
     ("I can't offer any credit on this account.", "understated"),
-    ("I'm not able to do 40% off.", "accurate"),
-    ("I can't do 30% off.", "understated"),
+    ("I'm not able to do 40% off, that's above what I'm authorized to give.", "accurate"),
+    ("I can't do 30% off, that's beyond my authorization.", "understated"),
+    ("I can't do 40% off with a $100 credit and a premium upgrade on a monthly plan.", None),
+    ("I can't go to a $50 credit, since $25 is my limit.", "understated"),
+    ("A $100 credit is beyond what I can authorize, but here is a solid offer.", "accurate"),
+    ("30% is outside what I'm authorized to approve, so I can't accept it.", "understated"),
+    ("I can go to my maximum: 20% off, a $25 credit, and a free upgrade.", "understated"),
     ("20% is the maximum I'm allowed.", "understated"),
     ("30% is my limit.", "accurate"),
+    ("20% is my absolute ceiling, so I need to adjust elsewhere.", "understated"),
+    ("A $100 credit is still above my $50 limit, so I can't accept that one.", "accurate"),
+    ("On monthly billing I can go up to a 20% discount and a $50 credit.", "understated"),
     ("I can only go up to 30%.", "accurate"),
     ("I can go up to 50% if you commit annually.", "overstated"),
     ("Unfortunately I'm unable to approve a $100 credit.", "accurate"),
@@ -28,8 +36,15 @@ LIMITS = {"discount_pct": 30, "credit_usd": 50}
     ("We can offer 10% off, a $25 credit, staying month to month.", None),
 ])
 def test_claim_rules(text, want):
-    labels = [judge(c, LIMITS) for c in find_claims(text)]
-    assert labels == ([] if want is None else [want])
+    labels = {judge(c, LIMITS) for c in find_claims(text)}
+    assert labels == (set() if want is None else {want})
+
+
+def test_thats_my_maximum_resolves_against_the_offer():
+    offer = {"discount_pct": 20, "credit_usd": 25, "upgrade": "premium", "term": "annual"}
+    claims = find_claims("That's the maximum discount I'm allowed to give.", offer)
+    assert [judge(c, LIMITS) for c in claims] == ["understated"]
+    assert find_claims("That's the maximum discount I'm allowed to give.") == []
 
 
 def test_candidate_sentences_include_unflagged_amounts():
