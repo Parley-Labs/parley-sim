@@ -53,6 +53,13 @@ def cmd_matched(args: argparse.Namespace) -> int:
     manifest = asyncio.run(run_matched(load_config(args.config), args.out))
     print(render(build_report(args.out)))
     print(f"manifest: {manifest}")
+    halted = [json.loads(l) for l in manifest.read_text().splitlines()
+              if '"skipped_halted"' in l or "ProviderHalted" in l]
+    if halted:
+        reason = next((r["error"] for r in halted if r.get("error")), "unknown")
+        print(f"\nRUN HALTED to protect the provider account: {reason}\n"
+              f"{len(halted)} cells did not run. Find the cause before re-running.")
+        return 2
     return 0
 
 

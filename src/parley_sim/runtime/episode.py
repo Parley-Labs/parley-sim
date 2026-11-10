@@ -46,10 +46,11 @@ class DecisionRequest:
 class DecisionResult:
     request_id: str
     action: JSON | None = None
-    reasoning: str | None = None
+    reasoning: str | None = None  # provider-returned deliberation (e.g. thinking summary)
     strike: str | None = None  # why no usable action: "timeout", "malformed_output", ...
     detail: str | None = None
     raw: JSON | None = None  # adapter-defined: request, response, usage, latency
+    explanation: str | None = None  # the model's own stated reason, in its output
 
 
 @dataclass(frozen=True)
@@ -121,7 +122,8 @@ class Episode:
                 return self._pending
             action = policy.decide(observation)
             self._commit(seat, observation, context, source="scripted", submitted=action,
-                         applied=action, reasoning=None, strike=None, detail=None, raw=None)
+                         applied=action, reasoning=None, explanation=None, strike=None,
+                         detail=None, raw=None)
 
     def abort(self, error: str) -> EpisodeComplete:
         """Close the trace with an errored footer (call from a driver's except)."""
@@ -140,11 +142,13 @@ class Episode:
             applied = self.env.fallback_action(self.state, req.seat)
         self._commit(req.seat, req.observation, req.context, source="external",
                      submitted=result.action, applied=applied, reasoning=result.reasoning,
-                     strike=strike, detail=detail, raw=result.raw)
+                     explanation=result.explanation, strike=strike, detail=detail,
+                     raw=result.raw)
 
     def _commit(self, seat: Seat, observation: JSON, context: JSON, *, source: str,
                 submitted: JSON | None, applied: JSON, reasoning: str | None,
-                strike: str | None, detail: str | None, raw: JSON | None) -> None:
+                explanation: str | None, strike: str | None, detail: str | None,
+                raw: JSON | None) -> None:
         turn = self.env.turn(self.state)
         self.state, events = self.env.apply(self.state, seat, applied)
         self._n_decisions += 1
@@ -153,7 +157,7 @@ class Episode:
             "type": "decision", "turn": turn, "seat": seat, "source": source,
             "label": self.spec.seats[seat], "observation": observation, "context": context,
             "submitted": submitted, "applied": applied, "reasoning": reasoning,
-            "strike": strike, "detail": detail, "raw": raw,
+            "explanation": explanation, "strike": strike, "detail": detail, "raw": raw,
         })
         state_hash = digest(self.env.state_to_json(self.state))
         for ev in events:

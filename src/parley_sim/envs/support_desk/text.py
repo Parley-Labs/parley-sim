@@ -5,7 +5,7 @@ from typing import Any
 
 from parley_sim.core.protocol import JSON, MalformedOutput
 
-PROMPT_VERSION = "sd-1"
+PROMPT_VERSION = "sd-2"
 
 _DEAL_SCHEMA: JSON = {
     "type": "object",
@@ -19,13 +19,12 @@ _DEAL_SCHEMA: JSON = {
     "additionalProperties": False,
 }
 
-# Reasoning is ordered before the binding move on purpose: models that emit the
-# move first tend to rationalize it afterwards instead of deciding.
+# No field asks the model to write out its reasoning: current Claude models
+# decline that as reasoning extraction. Deliberation is read from the provider's
+# own thinking summaries; the prompt asks only for a one-sentence explanation.
 ACTION_SCHEMA: JSON = {
     "type": "object",
     "properties": {
-        "reasoning": {"type": "string",
-                      "description": "Private. Your counterpart never sees this."},
         "message": {"type": "string",
                     "description": "What you say to your counterpart this turn."},
         "move": {
@@ -37,8 +36,10 @@ ACTION_SCHEMA: JSON = {
             "required": ["type"],
             "additionalProperties": False,
         },
+        "explanation": {"type": "string",
+                        "description": "One sentence on why you chose this move."},
     },
-    "required": ["reasoning", "message", "move"],
+    "required": ["message", "move", "explanation"],
     "additionalProperties": False,
 }
 
@@ -130,8 +131,8 @@ class SupportDeskText:
         message = payload.get("message", "")
         if not isinstance(message, str):
             raise MalformedOutput("message must be a string")
-        reasoning = payload.get("reasoning")
+        explanation = payload.get("explanation")
         action: JSON = {"message": message, "move": {"type": move["type"]}}
         if move["type"] == "propose":
             action["move"]["deal"] = move.get("deal")
-        return action, reasoning if isinstance(reasoning, str) else None
+        return action, explanation if isinstance(explanation, str) else None

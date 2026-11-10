@@ -5,7 +5,7 @@ from parley_sim.drivers.models import ModelSeat, ModelSpec
 from parley_sim.envs.support_desk import SupportDesk, SupportDeskText
 from parley_sim.runtime import DecisionRequest
 
-GOOD = json.dumps({"reasoning": "r", "message": "hi", "move": {"type": "none"}})
+GOOD = json.dumps({"message": "hi", "move": {"type": "none"}, "explanation": "r"})
 
 
 class FakeClient:
@@ -37,7 +37,7 @@ def seat(client, timeout_s=5.0):
 def test_valid_reply():
     res = asyncio.run(seat(FakeClient([GOOD])).decide(request()))
     assert res.strike is None and res.action["move"] == {"type": "none"}
-    assert res.reasoning == "r" and res.raw["usage"] == {"input_tokens": 10, "output_tokens": 5}
+    assert res.explanation == "r" and res.raw["usage"] == {"input_tokens": 10, "output_tokens": 5}
 
 
 def test_one_repair_retry_then_success():

@@ -65,4 +65,5 @@ class TextInterface(Protocol):
     def render(self, observation: JSON) -> tuple[str, str]:
         """(system, user) prompt for this observation."""
     def parse(self, payload: JSON) -> tuple[JSON, str | None]:
-        """(action, reasoning). Raises MalformedOutput."""
+        """(action, explanation): the move, plus the model's own short account of
+        it if the interface asks for one. Raises MalformedOutput."""

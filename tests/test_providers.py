@@ -98,3 +98,26 @@ def test_missing_gateway_key_never_falls_back_to_openai_key(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "secret")
     with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
         OpenAIClient(ModelSpec(name="o", provider="openai_compat", model="m"))
+
+
+def test_openai_content_filter_is_a_refusal(monkeypatch):
+    from parley_sim.drivers.models import ProviderRefusal
+    monkeypatch.setenv("OPENROUTER_API_KEY", "placeholder")
+    client = OpenAIClient(ModelSpec(name="o", provider="openai_compat", model="m"))
+    resp = NS(model="m", choices=[NS(message=NS(content=None), finish_reason="content_filter")],
+              usage=NS(prompt_tokens=1, completion_tokens=0))
+    client._client = NS(chat=NS(completions=Recorder(resp)))
+    with pytest.raises(ProviderRefusal):
+        asyncio.run(client.complete(system="s", user="u", schema={}))
+
+
+def test_anthropic_requests_summarized_thinking(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    client = AnthropicClient(ModelSpec(name="a", provider="anthropic", model="m"))
+    resp = NS(model="m", stop_reason="end_turn", usage=NS(input_tokens=1, output_tokens=1),
+              content=[NS(type="thinking", thinking="plan"), NS(type="text", text="{}")])
+    rec = Recorder(resp)
+    client._client = NS(messages=rec)
+    _, raw = asyncio.run(client.complete(system="s", user="u", schema={}))
+    assert rec.kwargs["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert raw["provider_reasoning"] == "plan"

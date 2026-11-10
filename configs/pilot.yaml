@@ -1,7 +1,7 @@
 # Go/no-go pilot: does support_desk show an SOC/AOC gap that clears the noise floor?
 # 20 seeds x 2 focal models x (1 SOC + 2 AOC) = 120 episodes.
 # Claude via OpenRouter, pinned to Anthropic as the upstream (BYOK), no fallback.
-run_id: pilot-sd1
+run_id: pilot-sd2
 env: support_desk
 seeds: "1000:1020"
 lineup:

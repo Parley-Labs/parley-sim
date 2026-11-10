@@ -52,7 +52,7 @@ class Walker:
     """Fake provider: always walks away, reporting 100 input tokens per call."""
 
     async def complete(self, *, system, user, schema):
-        reply = {"reasoning": "r", "message": "bye", "move": {"type": "walk_away"}}
+        reply = {"message": "bye", "move": {"type": "walk_away"}, "explanation": "r"}
         return json.dumps(reply), {"usage": {"input_tokens": 100, "output_tokens": 0}}
 
 
@@ -89,3 +89,50 @@ def test_report_shape(tmp_path):
     assert m["n_pairs"] == 4 and m["kind"] == "relational"
     assert m["noise_floor"] == 0.0  # scripted stand-ins are deterministic
     assert set(report["acceptance_by_offer_quality"]["scripted-agent"]) == {"soc", "aoc"}
+
+
+class Refuser:
+    def __init__(self):
+        self.calls = 0
+
+    async def complete(self, *, system, user, schema):
+        from parley_sim.drivers.models import ProviderRefusal
+        self.calls += 1
+        raise ProviderRefusal("reasoning_extraction")
+
+
+class Suspended:
+    def __init__(self):
+        self.calls = 0
+
+    async def complete(self, *, system, user, schema):
+        self.calls += 1
+        err = RuntimeError("model_access_suspended")
+        err.status_code = 403
+        raise err
+
+
+@pytest.mark.parametrize("client_cls", [Refuser, Suspended])
+def test_breaker_halts_the_run_and_limits_calls(tmp_path, client_cls):
+    client = client_cls()
+    manifest = asyncio.run(run_matched(api_cfg(concurrency=1, max_refusals=3), tmp_path,
+                                       client_factory=lambda spec: client))
+    _, cells = load_manifest(tmp_path)
+    statuses = [r["status"] for r in cells]
+    assert "skipped_halted" in statuses
+    assert set(statuses) <= {"done", "errored", "skipped_halted"}
+    assert statuses.count("skipped_halted") >= len(cells) - 3
+    assert client.calls <= 3
+    from parley_sim.cli import main
+    assert main(["report", str(tmp_path)]) == 0
+
+
+def test_cli_matched_exits_nonzero_when_halted(tmp_path, monkeypatch):
+    import yaml
+    from parley_sim import cli
+    cfg_path = tmp_path / "c.yaml"
+    cfg_path.write_text(yaml.safe_dump(api_cfg(concurrency=1).model_dump()))
+    real = cli.run_matched
+    monkeypatch.setattr(cli, "run_matched",
+                        lambda c, out: real(c, out, client_factory=lambda s: Suspended()))
+    assert cli.main(["matched", str(cfg_path), "--out", str(tmp_path / "run")]) == 2

@@ -22,13 +22,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from parley_sim import envs
 from parley_sim.core.protocol import Seat
 from parley_sim.drivers.local import run_episode
-from parley_sim.drivers.models import ModelSeat, ModelSpec, ProviderClient, ScriptedSeat, build_client
+from parley_sim.drivers.models import (Breaker, ModelSeat, ModelSpec, ProviderClient,
+                                       ScriptedSeat, build_client)
 from parley_sim.runtime.episode import EpisodeSpec
 from parley_sim.trace import JsonlWriter, is_complete, iter_trace
 
 ClientFactory = Callable[[ModelSpec], ProviderClient]
 _ID = r"^[A-Za-z0-9._-]+$"
-_OPERATIONAL = ("concurrency", "max_total_tokens")
+_OPERATIONAL = ("concurrency", "max_total_tokens", "max_refusals")
 
 
 def parse_seeds(spec: str) -> range:
@@ -53,6 +54,8 @@ class MatchedConfig(BaseModel):
     self_null_replicates: int = Field(default=1, ge=0)
     concurrency: int = Field(default=4, ge=1)
     max_total_tokens: int | None = Field(default=None, ge=1)
+    # Stop the whole run after this many provider refusals (or any 401/403).
+    max_refusals: int = Field(default=3, ge=1)
 
     @field_validator("seeds")
     @classmethod
@@ -189,6 +192,7 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
 
     entry = envs.get(cfg.env)
     lineup = {m.name: m for m in cfg.lineup}
+    breaker = Breaker(cfg.max_refusals)
     spent = {"tokens": sum(_tokens(r["usage"]) for r in done.values())}
     lock = asyncio.Lock()
     sem = asyncio.Semaphore(cfg.concurrency)
@@ -202,12 +206,18 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
         spec = lineup[name]
         if spec.provider == "scripted":
             return ScriptedSeat(spec, entry.text(), entry.make_policy(spec.model, seat))
-        return ModelSeat(spec, entry.text(), client_factory(spec))
+        return ModelSeat(spec, entry.text(), client_factory(spec), breaker)
 
     async def run_cell(cell: Cell) -> None:
         if cell.cell_key in done:
             return
         async with sem:
+            if breaker.tripped is not None:
+                async with lock:
+                    append({"type": "cell", **cell.model_dump(), "status": "skipped_halted",
+                            "trace": None, "usage": {"input_tokens": 0, "output_tokens": 0},
+                            "error": f"run halted: {breaker.tripped}"})
+                return
             async with lock:
                 if cfg.max_total_tokens is not None and spent["tokens"] >= cfg.max_total_tokens:
                     append({"type": "cell", **cell.model_dump(), "status": "skipped_budget",

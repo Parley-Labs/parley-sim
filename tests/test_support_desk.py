@@ -84,10 +84,11 @@ def test_text_interface_round_trip():
     text = SupportDeskText()
     system, user = text.render(env.observe(state, "customer"))
     assert "switching" in system and "You speak first." in user
-    action, reasoning = text.parse('{"reasoning": "r", "message": "m", '
+    action, explanation = text.parse('{"explanation": "r", "message": "m", '
                                    '"move": {"type": "propose", "deal": {"discount_pct": 10, '
                                    '"credit_usd": 0, "upgrade": "none", "term": "monthly"}}}')
-    assert reasoning == "r"
+    assert explanation == "r"
+    assert "reasoning" not in text.action_schema["properties"]
     env.apply(state, "customer", action)
     with pytest.raises(MalformedOutput):
         text.parse("not json")

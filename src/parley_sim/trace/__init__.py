@@ -16,7 +16,7 @@ from typing import Any, Iterator
 
 from parley_sim.core.hashing import canonical_json
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 
 class JsonlWriter:

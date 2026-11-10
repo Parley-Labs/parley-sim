@@ -1,6 +1,6 @@
 # 2-seed check of the API path and real cost per call before the pilot.
 # Claude via OpenRouter, pinned to Anthropic as the upstream (BYOK), no fallback.
-run_id: canary-sd1
+run_id: canary-sd2
 env: support_desk
 seeds: "1000:1002"
 lineup:
@@ -27,3 +27,4 @@ adaptive_counterparts: [opus, sonnet]
 self_null_replicates: 1
 concurrency: 4
 max_total_tokens: 300000
+max_refusals: 1  # first refusal stops the canary: it doubles as a safe probe

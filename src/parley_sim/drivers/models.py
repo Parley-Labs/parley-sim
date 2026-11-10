@@ -70,6 +70,7 @@ class AnthropicClient:
         kwargs: dict[str, Any] = {
             "model": self.spec.model, "max_tokens": self.spec.max_tokens, "system": system,
             "messages": [{"role": "user", "content": user}], "output_config": output_config,
+            "thinking": {"type": "adaptive", "display": "summarized"},
         }
         if self.spec.temperature is not None:
             kwargs["temperature"] = self.spec.temperature
@@ -127,6 +128,8 @@ class OpenAIClient:
                 kwargs["reasoning_effort"] = self.spec.effort
         kwargs.update(params)
         resp = await self._client.chat.completions.create(**kwargs)
+        if resp.choices[0].finish_reason == "content_filter":
+            raise ProviderRefusal("content_filter")
         msg = resp.choices[0].message
         usage = resp.usage
         cost = getattr(usage, "cost", None)  # OpenRouter, when usage accounting is on
@@ -157,6 +160,38 @@ def _usage_raw(spec: ModelSpec, text: TextInterface, attempts: list[JSON]) -> JS
             "usage": usage, "attempts": attempts}
 
 
+class ProviderHalted(RuntimeError):
+    """The run was stopped to protect the account (see Breaker)."""
+
+
+class Breaker:
+    """Shared by every seat in a run. Trips on any 401/403 or after
+    `max_refusals` refusals; once tripped, seats raise instead of calling the
+    provider again. Repeated refusals can get an account suspended, so a run
+    that is being refused must stop, not grind through its grid."""
+
+    def __init__(self, max_refusals: int = 3):
+        self.max_refusals = max_refusals
+        self.refusals = 0
+        self.tripped: str | None = None
+
+    def refusal(self, detail: str) -> None:
+        self.refusals += 1
+        if self.refusals >= self.max_refusals and self.tripped is None:
+            self.tripped = f"{self.refusals} refusals (last: {detail})"
+
+    def fatal(self, detail: str) -> None:
+        self.tripped = self.tripped or detail
+
+    def check(self) -> None:
+        if self.tripped is not None:
+            raise ProviderHalted(self.tripped)
+
+
+def _is_fatal(exc: Exception) -> bool:
+    return getattr(exc, "status_code", None) in (401, 403)
+
+
 class ScriptedSeat:
     """A lineup entry played by a scripted policy, routed through render and
     parse so the full model path runs offline. Not adaptive."""
@@ -166,25 +201,28 @@ class ScriptedSeat:
 
     async def decide(self, req: DecisionRequest) -> DecisionResult:
         self.text.render(req.observation)
-        payload = json.dumps({"reasoning": f"scripted:{self.policy.name}",
-                              **self.policy.decide(req.observation)})
-        action, reasoning = self.text.parse(payload)
+        payload = json.dumps({**self.policy.decide(req.observation),
+                              "explanation": f"scripted:{self.policy.name}"})
+        action, explanation = self.text.parse(payload)
         attempts = [{"served_model": f"scripted:{self.policy.name}", "payload": payload}]
-        return DecisionResult(req.request_id, action, reasoning,
-                              raw=_usage_raw(self.spec, self.text, attempts))
+        return DecisionResult(req.request_id, action, raw=_usage_raw(self.spec, self.text, attempts),
+                              explanation=explanation)
 
 
 class ModelSeat:
-    def __init__(self, spec: ModelSpec, text: TextInterface, client: ProviderClient):
+    def __init__(self, spec: ModelSpec, text: TextInterface, client: ProviderClient,
+                 breaker: Breaker | None = None):
         self.spec = spec
         self.text = text
         self.client = client
+        self.breaker = breaker or Breaker()
 
     async def decide(self, req: DecisionRequest) -> DecisionResult:
         system, user = self.text.render(req.observation)
         attempts: list[JSON] = []
         error: str | None = None
         for _ in range(2):
+            self.breaker.check()
             if error is not None:
                 user = (f"{user}\n\nYour previous reply was invalid ({error}). Reply again "
                         "with only a JSON object matching the schema.")
@@ -197,21 +235,26 @@ class ModelSeat:
             except asyncio.TimeoutError:
                 return self._result(req, attempts, strike="timeout")
             except ProviderRefusal as exc:
+                self.breaker.refusal(str(exc))
                 return self._result(req, attempts, strike="refusal", detail=str(exc))
             except Exception as exc:  # provider/network errors are a seat failure, not a crash
+                if _is_fatal(exc):
+                    self.breaker.fatal(repr(exc))
+                    raise ProviderHalted(repr(exc)) from exc
                 return self._result(req, attempts, strike="exception", detail=repr(exc))
             attempts.append({**raw, "payload": payload,
                              "latency_s": round(time.monotonic() - started, 3)})
             try:
-                action, reasoning = self.text.parse(payload)
+                action, explanation = self.text.parse(payload)
             except MalformedOutput as exc:
                 error = str(exc)
                 continue
-            return self._result(req, attempts, action=action, reasoning=reasoning)
+            return self._result(req, attempts, action=action,
+                                reasoning=raw.get("provider_reasoning"), explanation=explanation)
         return self._result(req, attempts, strike="malformed_output", detail=error)
 
     def _result(self, req: DecisionRequest, attempts: list[JSON], *, action: JSON | None = None,
-                reasoning: str | None = None, strike: str | None = None,
-                detail: str | None = None) -> DecisionResult:
+                reasoning: str | None = None, explanation: str | None = None,
+                strike: str | None = None, detail: str | None = None) -> DecisionResult:
         return DecisionResult(req.request_id, action, reasoning, strike, detail,
-                              _usage_raw(self.spec, self.text, attempts))
+                              _usage_raw(self.spec, self.text, attempts), explanation)
