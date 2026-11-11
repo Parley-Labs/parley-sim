@@ -15,8 +15,10 @@ same trace, wherever it runs. Both adapters work with any environment
 parley-sim can load, including [your own](custom-environments.md).
 
 Status: both adapters are covered by unit tests against the pinned library
-versions, but have not yet been exercised against a production Gym or
-OpenEnv deployment. Reports of what breaks are welcome.
+versions. The OpenEnv package has also been built as a Docker image and
+played end to end over HTTP. The NeMo Gym adapter has not yet run against a
+live Gym deployment with real agent servers. Reports of what breaks are
+welcome.
 
 ## NeMo Gym
 
