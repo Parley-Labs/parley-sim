@@ -13,7 +13,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from parley_sim.core.protocol import JSON, MalformedOutput, Policy, TextInterface
 from parley_sim.runtime.episode import DecisionRequest, DecisionResult
 
-Provider = Literal["anthropic", "openai", "openai_compat", "scripted"]
+# "harness": calls are made by an external harness client (e.g. a NeMo Gym agent server).
+Provider = Literal["anthropic", "openai", "openai_compat", "scripted", "harness"]
 
 
 class ModelSpec(BaseModel):
@@ -43,6 +44,15 @@ class ModelSpec(BaseModel):
         if self.provider == "anthropic" and self.temperature is not None:
             raise ValueError("the Anthropic API no longer accepts temperature; remove it")
         return self
+
+
+class EpisodeAbort(Exception):
+    """Infrastructure failure the seat must not absorb as a strike; the
+    driver fails the episode instead (and may retry it)."""
+
+    def __init__(self, reason: str, retryable: bool):
+        super().__init__(reason)
+        self.retryable = retryable
 
 
 class ProviderRefusal(Exception):
@@ -240,6 +250,8 @@ class ModelSeat:
                     timeout=self.spec.timeout_s)
             except asyncio.TimeoutError:
                 return self._result(req, attempts, strike="timeout")
+            except EpisodeAbort:
+                raise
             except ProviderRefusal as exc:
                 self.breaker.refusal(str(exc))
                 return self._result(req, attempts, strike="refusal", detail=str(exc))

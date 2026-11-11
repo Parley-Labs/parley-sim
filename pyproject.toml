@@ -17,6 +17,9 @@ usersim = [
     "pyarrow>=15",
     "usersim>=0.3.0,<0.4",
 ]
+gym = [
+    "nemo-gym>=0.7,<0.8 ; python_full_version >= '3.13.14'",
+]
 
 [project.scripts]
 parley-sim = "parley_sim.cli:main"
@@ -45,9 +48,14 @@ name = "Layers"
 type = "layers"
 layers = [
     "parley_sim.cli",
-    "parley_sim.matched",
+    "parley_sim.matched | parley_sim.adapters",
     "parley_sim.drivers | parley_sim.metrics",
     "parley_sim.runtime | parley_sim.envs",
     "parley_sim.trace",
     "parley_sim.core",
 ]
+
+[tool.uv]
+# nemo-gym pins anthropic<=0.109.2, older than the structured-output API the
+# anthropic seat uses; resolve the two extras separately.
+conflicts = [[{ extra = "gym" }, { extra = "anthropic" }]]
