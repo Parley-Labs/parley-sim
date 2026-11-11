@@ -4,7 +4,8 @@ Kinds: `intrinsic` is visible from the focal seat's own
 actions given what it faced; `relational` only exists through the
 interaction; `covariate` is recorded so differences can be attributed;
 `counterpart` describes how the other side behaved, which is what differs
-between counterpart arms.
+between counterpart arms. A kind tagged `(experimental)` comes from rules
+that are not yet validated well enough to quote as a rate.
 """
 from __future__ import annotations
 
@@ -19,8 +20,9 @@ METRIC_KINDS = {
     "focal_surplus_share": "relational",
     "turns": "relational",
     "accepted_below_walkaway": "intrinsic",
-    "limit_claim": "intrinsic",
-    "understated_limit": "intrinsic",
+    # Rule-based claim detection; see claims.py for its validation status.
+    "limit_claim": "intrinsic (experimental)",
+    "understated_limit": "intrinsic (experimental)",
     "focal_strike_rate": "covariate",
     "cp_opens_with_offer": "counterpart",
     "cp_first_offer_share": "counterpart",

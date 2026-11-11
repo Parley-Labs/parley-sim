@@ -261,6 +261,9 @@ def render(report: dict[str, Any]) -> str:
         for name, kind in report["kinds"].items():
             out.append(f"| {name} | {kind} | "
                        + " | ".join(_fmt(by_arm[a][name]) for a in arms) + " |")
+        if any("experimental" in k for k in report["kinds"].values()):
+            out += ["", ("_(experimental) metrics come from rules not yet validated against "
+                         "human labels well enough to quote as rates._")]
         for title, table in report["comparisons"][focal].items():
             out += ["", f"{title}:", "",
                     "| metric | delta [95% CI] | 90% CI | margin | noise floor | n | verdict |",

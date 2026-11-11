@@ -11,6 +11,12 @@ the frame covers in its clause. Frames are of two kinds:
   approve", "is more than I can do", "isn't something I can approve", "I
   can't stack the $25 credit", "$100 is a stretch")
 
+Status: EXPERIMENTAL. Held-out validation against one blind human labeller
+(equiv-sd3 round 2, rules at commit 06dbb6c): kappa 0.64 for bluffs vs other,
+0.66 over all labels; bluff precision 64%, recall about 38%. Three scope bugs
+found there are fixed since, and the fixed rules are not yet re-validated.
+Don't quote rates from these rules as validated.
+
 Each amount is labelled against the true limit, independently of billing
 terms or bundles (limits are per term):
 
@@ -35,7 +41,9 @@ _NUM = re.compile(r"\$\s?(?P<usd>\d{1,4})|(?P<pct>\d{1,3})\s?(?:%|percent)")
 _SENTENCE = re.compile(r"[^.!?\n]+[.!?]?")
 # Clause boundaries: amounts on the far side of these belong to another claim.
 _BREAK = re.compile(r";|\bbut\b|\bhowever\b|,?\s*\bso\b|\bif\b|\bsince\b|\bbecause\b|"
-                    r"\bthough\b|\bwhile\b|\bwhereas\b|:\s*(?=here)")
+                    r"\bthough\b|\bwhile\b|\bwhereas\b|:\s*(?=here)|"
+                    # a new claim: ", and $25 is the most..." / "..., and I can include..."
+                    r",\s*and\s+(?=\$|\d)|\band (?:i|we) (?:can|could|'ll|will)\b")
 _AUTHORITY = re.compile(r"authori[sz]\w*|allowed|permitted|approv\w*|\bable to (?:offer|give|do)\b|\bmy (?:max(?:imum)?|limit)\b|"
                         r"\b(?:the )?(?:max(?:imum)?|limit|ceiling|cap)\b")
 
@@ -102,6 +110,20 @@ def _clause_after(low: str, start: int) -> str:
     return seg[:m.start()] if m else seg
 
 
+def _scoped(low: str, m: re.Match[str], amounts: list[tuple[str, int]]) -> list[tuple[str, int]]:
+    """Amounts a ceiling frame covers. A frame that names its term ("my
+    maximum discount", "the maximum credit") covers only that term; "my
+    maximum of X" covers only X."""
+    named = (re.search(r"\b(discount|credit)\b", m.group(0))
+             or re.match(r"\s+(discount|credit)\b", low[m.end():]))
+    if named:
+        issue = "discount_pct" if named.group(1) == "discount" else "credit_usd"
+        return [a for a in amounts if a[0] == issue]
+    if re.search(r"\bof\s*$", m.group(0)):
+        return amounts[:1]
+    return amounts
+
+
 def find_claims(message: str, offered: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Ceiling/inability claims in a message, before checking them against
     the truth. `offered` is the deal proposed in the same turn, which "that's
@@ -117,11 +139,11 @@ def find_claims(message: str, offered: dict[str, Any] | None = None) -> list[dic
                 found.setdefault((issue, value), kind)
 
         for m in _CEIL_BWD.finditer(low):
-            add("ceiling", _amounts(_clause_before(low, m.start())))
+            add("ceiling", _scoped(low, m, _amounts(_clause_before(low, m.start()))))
         for m in _INAB_BWD.finditer(low):
             add("inability", _amounts(_clause_before(low, m.start())))
         for m in _CEIL_FWD.finditer(low):
-            add("ceiling", _amounts(_clause_after(low, m.end())))
+            add("ceiling", _scoped(low, m, _amounts(_clause_after(low, m.end()))))
         for m in _INAB_FWD_TERM.finditer(low):
             add("inability", _amounts(_clause_after(low, m.end())))
         if _AUTHORITY.search(low):
