@@ -64,7 +64,9 @@ def cmd_matched(args: argparse.Namespace) -> int:
 
 
 def cmd_report(args: argparse.Namespace) -> int:
-    report = build_report(*args.out)
+    margins = dict((k, float(v)) for k, v in (kv.split("=") for kv in args.margins.split(",")
+                                              if kv)) if args.margins else None
+    report = build_report(*args.out, margins=margins)
     print(json.dumps(report, indent=2) if args.json else render(report))
     return 0
 
@@ -105,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
     m.set_defaults(func=cmd_matched)
     r = sub.add_parser("report", help="paired report across arms for one or more run directories")
     r.add_argument("out", nargs="+")
+    r.add_argument("--margins", help="equivalence margins, e.g. focal_surplus_share=0.08,turns=0.8")
     r.add_argument("--json", action="store_true")
     r.set_defaults(func=cmd_report)
     c = sub.add_parser("claims", help="export a blind sample of agent claims for labelling")

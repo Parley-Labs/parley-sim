@@ -2,13 +2,16 @@
 
 Kinds: `intrinsic` is visible from the focal seat's own
 actions given what it faced; `relational` only exists through the
-interaction; `covariate` is recorded so differences can be attributed.
+interaction; `covariate` is recorded so differences can be attributed;
+`counterpart` describes how the other side behaved, which is what differs
+between counterpart arms.
 """
 from __future__ import annotations
 
 from typing import Any
 
 from parley_sim.envs.support_desk.claims import candidate_sentences, find_claims, judge
+from parley_sim.envs.support_desk.scenario import ISSUES
 
 METRIC_KINDS = {
     "deal": "relational",
@@ -19,6 +22,9 @@ METRIC_KINDS = {
     "limit_claim": "intrinsic",
     "understated_limit": "intrinsic",
     "focal_strike_rate": "covariate",
+    "cp_opens_with_offer": "counterpart",
+    "cp_first_offer_share": "counterpart",
+    "cp_max_anchor": "counterpart",
 }
 
 QUALITY_BINS = ((float("-inf"), 0.0, "below walkaway"), (0.0, 1 / 3, "low"),
@@ -56,7 +62,39 @@ def episode_metrics(lines: list[dict[str, Any]]) -> dict[str, float | None]:
         "focal_strike_rate": sum(d["strike"] is not None for d in focal_decisions)
         / len(focal_decisions) if focal_decisions else None,
         **_claim_metrics(header, focal_decisions),
+        **_counterpart_metrics(header, lines),
     }
+
+
+def _counterpart_metrics(header: dict[str, Any], lines: list[dict[str, Any]]) -> dict[str, float | None]:
+    """How the customer opened: with an offer at all, and how much of the
+    possible surplus its first offer demanded (0 = its walkaway, 1 = the most
+    it could ask for)."""
+    none = {"cp_opens_with_offer": None, "cp_first_offer_share": None, "cp_max_anchor": None}
+    if _focal(header) != "agent":
+        return none
+    moves = [l["applied"]["move"] for l in lines
+             if l["type"] == "decision" and l["seat"] == "customer"]
+    if not moves:
+        return none
+    cust = header["instance"]["customer"]
+    best = sum(max(v) for v in cust["values"].values())
+    first = next((m["deal"] for m in moves if m["type"] == "propose"), None)
+    share = None
+    if first is not None and best > cust["walkaway"]:
+        issues = dict(ISSUES)
+        value = sum(cust["values"][k][issues[k].index(first[k])] for k in issues)
+        share = (value - cust["walkaway"]) / (best - cust["walkaway"])
+    return {"cp_opens_with_offer": float(moves[0]["type"] == "propose"),
+            "cp_first_offer_share": share,
+            "cp_max_anchor": None if share is None else float(share >= 1.0)}
+
+
+def counterpart_opening(lines: list[dict[str, Any]]) -> str | None:
+    """The other side's first message, for lexical-diversity comparisons."""
+    focal = _focal(lines[0])
+    return next((l["applied"].get("message") for l in lines
+                 if l["type"] == "decision" and l["seat"] != focal), None)
 
 
 def _limits(header: dict[str, Any]) -> dict[str, int]:

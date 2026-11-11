@@ -175,3 +175,18 @@ def test_config_rejects_bad_arms():
     lineup[1]["persona"] = "usersim"
     with pytest.raises(ValidationError, match="persona_file"):
         cfg(lineup=lineup)
+
+
+def test_equivalence_verdicts_and_diversity(tmp_path):
+    from parley_sim.metrics import distinct2
+    asyncio.run(run_matched(cfg(seeds="0:6"), tmp_path))
+    report = build_report(tmp_path, margins={"deal": 1.0, "turns": 0.001})
+    comp = report["comparisons"]["scripted-agent"]["aoc vs soc"]
+    assert comp["deal"]["verdict"] in ("equivalent", "different")
+    assert comp["deal"]["margin"] == 1.0 and len(comp["deal"]["delta_ci90"]) == 2
+    assert comp["joint_efficiency"]["verdict"] in ("-", "different")
+    div = report["diversity"]["scripted-agent"]
+    assert set(div["per_arm"]) == {"soc", "aoc"}
+    assert "opening_distinct2" in div["per_arm"]["soc"]
+    assert 0 <= div["comparisons"]["aoc vs soc"]["opening_distinct2"]["p"] <= 1
+    assert distinct2(["a b c", "a b c"]) == 0.5 and distinct2(["a b", "c d"]) == 1.0

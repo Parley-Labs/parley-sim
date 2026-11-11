@@ -18,6 +18,7 @@ class EnvEntry:
     metric_kinds: dict[str, str]
     decision_rows: Callable[[Lines], list[dict[str, Any]]]
     claim_rows: Callable[[Lines], list[dict[str, Any]]] | None = None  # for κ validation
+    counterpart_opening: Callable[[Lines], str | None] | None = None  # for lexical diversity
 
 
 def registry() -> dict[str, EnvEntry]:
@@ -25,7 +26,8 @@ def registry() -> dict[str, EnvEntry]:
     from parley_sim.envs.support_desk import metrics as sdm
     return {"support_desk": EnvEntry(sd.SupportDesk, sd.make_policy, sd.SupportDeskText,
                                      sd.AGENT, sdm.episode_metrics, sdm.METRIC_KINDS,
-                                     sdm.decision_rows, sdm.claim_rows)}
+                                     sdm.decision_rows, sdm.claim_rows,
+                                     sdm.counterpart_opening)}
 
 
 def get(name: str) -> EnvEntry:

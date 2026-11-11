@@ -7,6 +7,13 @@ identical. Each comparison's delta sits next to its noise floor: the same
 delta between two identically configured replicates of a model arm. A shift
 is only worth reading when it clears both its bootstrap interval and that
 floor.
+
+With equivalence margins, a comparison also gets a verdict: "equivalent" when
+the 90% interval of the delta lies inside +/- margin (two one-sided tests at
+5%), "different" when it clears its interval and floor, else "inconclusive".
+Diversity compares arms on spread rather than means: the across-seed SD of
+outcome metrics and the distinct-bigram ratio of the counterpart's opening
+messages, each with a paired bootstrap interval over seeds.
 """
 from __future__ import annotations
 
@@ -31,12 +38,56 @@ def load_manifest(out_dir: str | Path) -> tuple[dict[str, Any], list[dict[str, A
     return run, list(latest.values())
 
 
-def bootstrap_ci(values: list[float], n: int = 2000, seed: int = 0) -> tuple[float, float]:
+DISPERSION_METRICS = ("focal_surplus_share", "turns", "cp_first_offer_share")
+
+
+def bootstrap_ci(values: list[float], n: int = 2000, seed: int = 0,
+                 level: float = 0.95) -> tuple[float, float]:
     if len(values) < 2:
         return (float("nan"), float("nan"))
     rng = random.Random(seed)
     means = sorted(statistics.fmean(rng.choices(values, k=len(values))) for _ in range(n))
-    return means[int(0.025 * n)], means[int(0.975 * n) - 1]
+    tail = (1 - level) / 2
+    return means[int(tail * n)], means[int((1 - tail) * n) - 1]
+
+
+def _paired_stat_ci(pairs: list[tuple[Any, Any]], stat, n: int = 2000,
+                    seed: int = 0) -> tuple[float | None, float, float]:
+    """Delta stat(b) - stat(a) over seed-paired samples, with a 95% bootstrap
+    interval that resamples seeds (keeping each seed's pair together)."""
+    if len(pairs) < 3:
+        return None, float("nan"), float("nan")
+    point = stat([b for _, b in pairs]) - stat([a for a, _ in pairs])
+    rng = random.Random(seed)
+    boots = []
+    for _ in range(n):
+        sample = rng.choices(pairs, k=len(pairs))
+        boots.append(stat([b for _, b in sample]) - stat([a for a, _ in sample]))
+    boots.sort()
+    return point, boots[int(0.025 * n)], boots[int(0.975 * n) - 1]
+
+
+def _paired_permutation_p(pairs: list[tuple[Any, Any]], stat, n: int = 2000,
+                          seed: int = 0) -> tuple[float | None, float]:
+    """Delta stat(b) - stat(a) and a two-sided p-value from randomly swapping
+    the arms within each seed's pair. Used for statistics a bootstrap would
+    bias (resampling duplicates texts, which deflates distinct-bigram ratios)."""
+    if len(pairs) < 3:
+        return None, float("nan")
+    point = stat([b for _, b in pairs]) - stat([a for a, _ in pairs])
+    rng = random.Random(seed)
+    hits = 0
+    for _ in range(n):
+        swapped = [(b, a) if rng.random() < 0.5 else (a, b) for a, b in pairs]
+        d = stat([b for _, b in swapped]) - stat([a for a, _ in swapped])
+        hits += abs(d) >= abs(point) - 1e-12
+    return point, (hits + 1) / (n + 1)
+
+
+def distinct2(texts: list[str]) -> float:
+    """Unique word bigrams / all word bigrams across a set of messages."""
+    grams = [g for t in texts for g in zip(t.lower().split(), t.lower().split()[1:])]
+    return len(set(grams)) / len(grams) if grams else float("nan")
 
 
 def _mean(xs: list[float]) -> float | None:
@@ -53,11 +104,14 @@ def _arm_order(runs: list[dict[str, Any]], present: set[str]) -> list[str]:
     return [a for a in order if a in present]
 
 
-def build_report(*out_dirs: str | Path) -> dict[str, Any]:
+def build_report(*out_dirs: str | Path,
+                 margins: dict[str, float] | None = None) -> dict[str, Any]:
+    margins = margins or {}
     runs, env_name = [], None
     cells: dict[tuple[int, str, str, int], dict[str, Any]] = {}
     scenario: dict[int, str] = {}
     decisions: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    openings: dict[tuple[str, str], dict[int, str]] = defaultdict(dict)
     status_counts: dict[str, int] = defaultdict(int)
     spend = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
     for out_dir in out_dirs:
@@ -86,6 +140,10 @@ def build_report(*out_dirs: str | Path) -> dict[str, Any]:
             cells[key] = {**c, "metrics": entry.episode_metrics(lines)}
             if c["replicate"] == 0:
                 decisions[(c["focal"], c["arm"])].extend(entry.decision_rows(lines))
+                if entry.counterpart_opening is not None:
+                    text = entry.counterpart_opening(lines)
+                    if text:
+                        openings[(c["focal"], c["arm"])][c["seed"]] = text
     entry = envs.get(env_name)
     arms = _arm_order(runs, {k[2] for k in cells})
     focals = list(dict.fromkeys(f for run in runs for f in run["config"]["focal_models"]))
@@ -118,16 +176,57 @@ def build_report(*out_dirs: str | Path) -> dict[str, Any]:
                               if (va := value(s, focal, a, 0, name)) is not None
                               and (vb := value(s, focal, b, 0, name)) is not None]
                     lo, hi = bootstrap_ci(deltas)
+                    lo90, hi90 = bootstrap_ci(deltas, level=0.90)
                     delta = _mean(deltas)
                     fl = [f for f in (floors[focal][a][name], floors[focal][b][name])
                           if f is not None]
                     floor = max(fl) if fl else None
+                    clears = bool(deltas) and not (lo <= 0 <= hi) and (
+                        floor is None or abs(delta) > floor)
+                    margin = margins.get(name)
+                    if margin is not None and bool(deltas) and -margin <= lo90 and hi90 <= margin:
+                        verdict = "equivalent"
+                    elif clears:
+                        verdict = "different"
+                    else:
+                        verdict = "inconclusive" if margin is not None else "-"
                     table[name] = {
                         "kind": kind, "n_pairs": len(deltas), "delta_mean": delta,
-                        "delta_ci": [lo, hi], "noise_floor": floor,
-                        "clears": bool(deltas) and not (lo <= 0 <= hi)
-                        and (floor is None or abs(delta) > floor),
+                        "delta_ci": [lo, hi], "delta_ci90": [lo90, hi90],
+                        "noise_floor": floor, "margin": margin, "clears": clears,
+                        "verdict": verdict,
                     }
+
+    diversity: dict[str, dict[str, Any]] = {}
+    for focal in focals:
+        per_arm: dict[str, dict[str, float | None]] = {}
+        for arm in arms:
+            row: dict[str, float | None] = {}
+            for name in DISPERSION_METRICS:
+                if name in entry.metric_kinds:
+                    vals = [v for s in seeds if (v := value(s, focal, arm, 0, name)) is not None]
+                    row[f"sd_{name}"] = statistics.stdev(vals) if len(vals) > 1 else None
+            texts = list(openings[(focal, arm)].values())
+            row["opening_distinct2"] = distinct2(texts) if texts else None
+            per_arm[arm] = row
+        comps: dict[str, dict[str, Any]] = {}
+        for i, a in enumerate(arms):
+            for b in arms[i + 1:]:
+                out_c: dict[str, Any] = {}
+                for name in DISPERSION_METRICS:
+                    if name not in entry.metric_kinds:
+                        continue
+                    pairs = [(va, vb) for s in seeds
+                             if (va := value(s, focal, a, 0, name)) is not None
+                             and (vb := value(s, focal, b, 0, name)) is not None]
+                    d, lo, hi = _paired_stat_ci(pairs, statistics.stdev)
+                    out_c[f"sd_{name}"] = {"delta": d, "ci": [lo, hi], "n": len(pairs)}
+                pairs = [(openings[(focal, a)][s], openings[(focal, b)][s]) for s in seeds
+                         if s in openings[(focal, a)] and s in openings[(focal, b)]]
+                d, pval = _paired_permutation_p(pairs, distinct2)
+                out_c["opening_distinct2"] = {"delta": d, "p": pval, "n": len(pairs)}
+                comps[f"{b} vs {a}"] = out_c
+        diversity[focal] = {"per_arm": per_arm, "comparisons": comps}
 
     acceptance: dict[str, dict[str, dict[str, Any]]] = {}
     for (focal, arm), rows in decisions.items():
@@ -139,7 +238,8 @@ def build_report(*out_dirs: str | Path) -> dict[str, Any]:
     return {"run_ids": [r["run_id"] for r in runs], "env": env_name,
             "cells": dict(status_counts), "spend": spend, "arms": arms,
             "kinds": dict(entry.metric_kinds), "means": means, "noise_floors": floors,
-            "comparisons": comparisons, "acceptance_by_offer_quality": acceptance}
+            "comparisons": comparisons, "diversity": diversity, "margins": margins,
+            "acceptance_by_offer_quality": acceptance}
 
 
 def _fmt(v: Any) -> str:
@@ -163,13 +263,26 @@ def render(report: dict[str, Any]) -> str:
                        + " | ".join(_fmt(by_arm[a][name]) for a in arms) + " |")
         for title, table in report["comparisons"][focal].items():
             out += ["", f"{title}:", "",
-                    "| metric | delta [95% CI] | noise floor | n | clears |",
-                    "|---|---|---|---|---|"]
+                    "| metric | delta [95% CI] | 90% CI | margin | noise floor | n | verdict |",
+                    "|---|---|---|---|---|---|---|"]
             for name, m in table.items():
                 lo, hi = m["delta_ci"]
+                lo90, hi90 = m["delta_ci90"]
                 out.append(f"| {name} | {_fmt(m['delta_mean'])} [{_fmt(lo)}, {_fmt(hi)}] "
-                           f"| {_fmt(m['noise_floor'])} | {m['n_pairs']} | "
-                           f"{'yes' if m['clears'] else 'no'} |")
+                           f"| [{_fmt(lo90)}, {_fmt(hi90)}] | {_fmt(m['margin'])} "
+                           f"| {_fmt(m['noise_floor'])} | {m['n_pairs']} | {m['verdict']} |")
+        div = report["diversity"].get(focal)
+        if div:
+            cols = list(next(iter(div["per_arm"].values())))
+            out += ["", "Diversity (spread across seeds; opening-message variety):", "",
+                    "| arm | " + " | ".join(cols) + " |", "|---|" + "---|" * len(cols)]
+            for arm, row in div["per_arm"].items():
+                out.append(f"| {arm} | " + " | ".join(_fmt(row[c]) for c in cols) + " |")
+            for title, comp in div["comparisons"].items():
+                out.append(f"\n{title}: " + "; ".join(
+                    f"{k} {_fmt(v['delta'])} " + (f"(p={v['p']:.3f})" if "p" in v else
+                                                  f"[{_fmt(v['ci'][0])}, {_fmt(v['ci'][1])}]")
+                    for k, v in comp.items()))
         table = report["acceptance_by_offer_quality"].get(focal, {})
         if table:
             out += ["", "Acceptance by offer quality (every faced offer, declines included):", "",
