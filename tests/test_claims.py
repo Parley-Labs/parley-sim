@@ -94,3 +94,13 @@ def test_bluff_shows_up_in_metric_and_round_trips_through_kappa(tmp_path):
         w.writerows(rows)
     res = claims_kappa(blind, key)
     assert res["n"] == n and res["kappa_understated"] == 1.0 and res["invalid"] == []
+
+
+def test_export_takes_every_rare_label(tmp_path):
+    asyncio.run(run_matched(bluff_cfg(), tmp_path, client_factory=lambda s: Bluffer()))
+    blind, key, n = export_claims(tmp_path, tmp_path / "l" / "c", sample=6)
+    with key.open() as f:
+        rows = list(csv.DictReader(f))
+    labels = [r["auto_label"] for r in rows]
+    assert labels.count("understated") == 3 and labels.count("none") == 3
+    assert all(int(r["label_total_in_run"]) >= 1 for r in rows)

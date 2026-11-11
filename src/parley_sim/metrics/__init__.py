@@ -311,9 +311,13 @@ def cohen_kappa(a: list[str], b: list[str]) -> float:
 def export_claims(out_dir: str | Path, prefix: str | Path, sample: int = 200,
                   seed: int = 0) -> tuple[Path, Path, int]:
     """Write `<prefix>.blind.csv` (sentences and true limits, empty
-    `human_label`, no rule output) and `<prefix>.key.csv` (the rules' labels).
-    Up to half the sample is sentences the rules flagged, the rest unflagged
-    ones, so a rare label still gets enough rows for a stable kappa."""
+    `human_label`, no rule output) and `<prefix>.key.csv` (the rules' labels,
+    plus each label's total count in the run so agreement can be reweighted).
+
+    Stratified by the rules' label: half the sample is sentences the rules
+    flagged, split evenly across flagged labels with any rare label taken
+    whole (a bluff may occur a handful of times in thousands of sentences);
+    the other half is unflagged sentences, where the rules' misses would be."""
     import csv
     out = Path(out_dir)
     run, cells = load_manifest(out)
@@ -323,12 +327,19 @@ def export_claims(out_dir: str | Path, prefix: str | Path, sample: int = 200,
     rows = [r for c in cells if c["status"] == "done"
             for r in entry.claim_rows(read_trace(out / c["trace"]))]
     rng = random.Random(seed)
-    flagged = [r for r in rows if r["auto_label"] != "none"]
-    plain = [r for r in rows if r["auto_label"] == "none"]
-    rng.shuffle(flagged)
-    rng.shuffle(plain)
-    take = flagged[: sample // 2]
-    take += plain[: sample - len(take)]
+    by_label: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for r in rows:
+        by_label[r["auto_label"]].append(r)
+    for group in by_label.values():
+        rng.shuffle(group)
+    totals = {label: len(group) for label, group in by_label.items()}
+    flagged = sorted((l for l in by_label if l != "none"), key=lambda l: totals[l])
+    take: list[dict[str, Any]] = []
+    budget = sample // 2
+    for i, label in enumerate(flagged):
+        quota = (budget - len(take)) // (len(flagged) - i)
+        take += by_label[label][:quota]
+    take += by_label.get("none", [])[: sample - len(take)]
     rng.shuffle(take)
     prefix = Path(prefix)
     prefix.parent.mkdir(parents=True, exist_ok=True)
@@ -340,9 +351,10 @@ def export_claims(out_dir: str | Path, prefix: str | Path, sample: int = 200,
             w.writerow([r["id"], r["limit_discount_pct"], r["limit_credit_usd"], r["sentence"], ""])
     with key.open("w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["id", "auto_label", "arm", "label_model"])
+        w.writerow(["id", "auto_label", "arm", "label_model", "label_total_in_run"])
         for r in take:
-            w.writerow([r["id"], r["auto_label"], r["arm"], r["label_model"]])
+            w.writerow([r["id"], r["auto_label"], r["arm"], r["label_model"],
+                        totals[r["auto_label"]]])
     return blind, key, len(take)
 
 
