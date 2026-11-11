@@ -1,0 +1,104 @@
+# Configuration
+
+A run is one YAML file passed to `parley-sim matched CONFIG --out DIR`. The
+bundled `configs/` folder has working examples: `pilot.yaml` (two arms),
+`equiv-sd3.yaml` (three arms, pre-registered) and `family-sd4.yaml` (extra
+arms run into their own directory).
+
+## Run fields
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `run_id` | required | Name for the run; prefixes every cell key |
+| `env` | `support_desk` | Environment name, or an import path such as `my_pkg.envs:ENTRY` (see [your own environment](custom-environments.md)) |
+| `env_config` | `{}` | Options passed to the environment, e.g. `{max_turns: 10}` for `support_desk` |
+| `seeds` | required | Half-open range `start:stop`, e.g. `1000:1040` for 40 scenarios |
+| `focal_seat` | the env's default | Which seat is under test (`agent` in `support_desk`) |
+| `lineup` | required | Model specs, below |
+| `focal_models` | required | Lineup names to evaluate in the focal seat; each gets its own grid |
+| `scripted_counterparts` | required | Policy names for the `soc` arm |
+| `adaptive_counterparts` | required | Lineup names for the `aoc` arm |
+| `extra_arms` | `{}` | More model-counterpart arms, `{arm_name: [lineup names]}` |
+| `run_arms` | all | Only run these arms; the rest can live in another directory |
+| `persona_file` | none | Persona panel for lineup entries with `persona: usersim` ([personas](personas.md)) |
+| `self_null_replicates` | `1` | Identical replays of each model-counterpart cell, for the noise floor; `0` skips them |
+| `concurrency` | `4` | Episodes in flight at once |
+| `max_total_tokens` | none | Hard cap on input + output tokens across the run |
+| `max_refusals` | `3` | Halt the whole run after this many provider refusals |
+
+The grid size is seeds × focal models × (1 + model arms × (1 +
+`self_null_replicates`)). `family-sd4.yaml`, for example, has 40 seeds, 2
+focal models, 2 arms and no replicates: 160 episodes.
+
+## Model specs
+
+Each `lineup` entry:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `name` | required | How the config refers to it |
+| `provider` | required | `anthropic`, `openai`, `openai_compat`, `scripted` or `harness` |
+| `model` | required | The provider's model ID (for `scripted`, a policy name) |
+| `base_url` | none | For `openai_compat`: the gateway, e.g. `https://openrouter.ai/api/v1` |
+| `api_key_env` | per provider | Environment variable holding the key |
+| `temperature` | omitted | Sent only if set; not accepted for `anthropic` |
+| `effort` | omitted | Reasoning effort: `low`, `medium`, `high`, `xhigh`, `max` |
+| `max_tokens` | `4096` | Output cap per call |
+| `timeout_s` | `120` | Per-call timeout |
+| `provider_params` | none | Merged into the request last, e.g. OpenRouter routing |
+| `persona` | none | `usersim` conditions this seat on a UserSim persona |
+
+### Providers
+
+| Provider | Key variable | Notes |
+| --- | --- | --- |
+| `anthropic` | `ANTHROPIC_API_KEY` | Structured outputs; adaptive thinking with summaries recorded in the trace; `effort` goes to `output_config.effort` |
+| `openai` | `OPENAI_API_KEY` | `response_format` JSON schema; `effort` goes to `reasoning_effort` |
+| `openai_compat` | `OPENROUTER_API_KEY` | Any OpenAI-compatible gateway (OpenRouter, vLLM, NIM); `effort` goes to OpenRouter's `reasoning.effort` |
+| `scripted` | none | Plays a named policy through the text interface; for offline tests |
+| `harness` | none | Calls are made by an external harness (used by the NeMo Gym adapter) |
+
+The key is read from `api_key_env` if set. For `openai_compat` the client
+never falls back to `OPENAI_API_KEY`, so an OpenAI key is never sent to
+another gateway.
+
+To pin OpenRouter to one upstream and get cost reporting:
+
+```yaml
+provider_params:
+  extra_body:
+    provider: {order: [Anthropic], allow_fallbacks: false}
+    usage: {include: true}
+```
+
+For a model that might not support structured outputs everywhere, use
+`provider: {require_parameters: true}` instead of pinning.
+
+## Safety and spend
+
+- **Refusal breaker.** All seats in a run share a breaker. It trips on any
+  401 or 403, or after `max_refusals` provider refusals. Once tripped, no
+  further calls are made, the remaining cells are recorded as halted, and
+  `matched` exits with code 2 and a `RUN HALTED` message. Repeated refusals
+  can get a provider account suspended; find the cause before re-running.
+- **Token cap.** With `max_total_tokens`, cells that would start after the
+  cap is reached are recorded as `skipped_budget`.
+- **Refusals are strikes, not substitutions.** No client silently falls back
+  to another model, which would contaminate the evaluation.
+
+## Resuming
+
+Run the same command again. A cell is skipped only if the manifest says it is
+done and its trace has a footer; anything else is run again. parley-sim
+refuses to resume into a directory created from a different config, so
+changing the experiment means a new `--out`.
+
+## Output directory
+
+| Path | Contents |
+| --- | --- |
+| `manifest.jsonl` | The config, its hash, and one row per cell with status, trace path and usage |
+| `traces/<cell_key>.jsonl` | One trace per episode ([format](concepts.md#traces)) |
+
+Produce the report with `parley-sim report DIR > DIR/report.md`, or
+`--json` for the full structure.

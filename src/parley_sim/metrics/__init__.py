@@ -285,9 +285,9 @@ def render(report: dict[str, Any]) -> str:
                 out.append(f"\n{title}: " + "; ".join(
                     f"{k} {_fmt(v['delta'])} " + (f"(p={v['p']:.3f})" if "p" in v else
                                                   f"[{_fmt(v['ci'][0])}, {_fmt(v['ci'][1])}]")
-                    for k, v in comp.items()))
+                    for k, v in comp.items() if v["n"]))
         table = report["acceptance_by_offer_quality"].get(focal, {})
-        if table:
+        if any(table.values()):
             out += ["", "Acceptance by offer quality (every faced offer, declines included):", "",
                     "| arm | bin | offers | accepted | rate |", "|---|---|---|---|---|"]
             for arm in arms:

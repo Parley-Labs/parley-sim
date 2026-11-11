@@ -1,0 +1,32 @@
+{
+  "n": 150,
+  "invalid": [],
+  "kappa_understated": 0.49579831932773155,
+  "kappa_all": 0.6342299779013943,
+  "confusion_auto_by_human": {
+    "understated": {
+      "understated": 7,
+      "overstated": 0,
+      "accurate": 2,
+      "none": 2
+    },
+    "overstated": {
+      "understated": 0,
+      "overstated": 0,
+      "accurate": 0,
+      "none": 0
+    },
+    "accurate": {
+      "understated": 1,
+      "overstated": 0,
+      "accurate": 62,
+      "none": 1
+    },
+    "none": {
+      "understated": 7,
+      "overstated": 0,
+      "accurate": 19,
+      "none": 49
+    }
+  }
+}

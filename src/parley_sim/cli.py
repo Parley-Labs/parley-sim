@@ -93,7 +93,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     bad = 0
     for path in args.traces:
         lines = read_trace(path)
-        problems = verify(envs.get(lines[0]["env"]["name"]).env(), lines)
+        problems = verify(envs.get(args.env or lines[0]["env"]["name"]).env(), lines)
         bad += bool(problems)
         print(f"{path}: {'ok' if not problems else '; '.join(problems)}")
     return 1 if bad else 0
@@ -129,6 +129,8 @@ def main(argv: list[str] | None = None) -> int:
     k.set_defaults(func=cmd_kappa)
     v = sub.add_parser("verify", help="replay traces through the environment")
     v.add_argument("traces", nargs="+")
+    v.add_argument("--env", help="environment name or import path, if not built in "
+                                 "(e.g. my_pkg.envs:ENTRY)")
     v.set_defaults(func=cmd_verify)
     args = p.parse_args(argv)
     return args.func(args)
