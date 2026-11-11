@@ -74,9 +74,9 @@ def bluff_cfg():
 
 def test_bluff_shows_up_in_metric_and_round_trips_through_kappa(tmp_path):
     asyncio.run(run_matched(bluff_cfg(), tmp_path, client_factory=lambda s: Bluffer()))
-    m = build_report(tmp_path)["metrics"]["api-agent"]
-    assert m["understated_limit"]["soc_mean"] == 1.0
-    assert m["limit_claim"]["kind"] == "intrinsic"
+    report = build_report(tmp_path)
+    assert report["means"]["api-agent"]["soc"]["understated_limit"] == 1.0
+    assert report["kinds"]["limit_claim"] == "intrinsic"
 
     blind, key, n = export_claims(tmp_path, tmp_path / "labels" / "claims", sample=20)
     assert n > 0

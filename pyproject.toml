@@ -13,6 +13,10 @@ dependencies = [
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.40"]
 openai = ["openai>=1.50"]
+usersim = [
+    "pyarrow>=15",
+    "usersim>=0.3.0,<0.4",
+]
 
 [project.scripts]
 parley-sim = "parley_sim.cli:main"

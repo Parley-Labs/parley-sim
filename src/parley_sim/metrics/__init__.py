@@ -1,9 +1,12 @@
-"""Paired SOC/AOC report from a matched-run directory.
+"""Paired report across arms, from one or more matched-run directories.
 
-Each metric's scripted-vs-adaptive delta is computed within `pair_key` (same
-seed, scenario, focal seat) and shown next to the self-null noise floor: the
-same delta between two identically configured AOC replicates. A shift is only
-worth reading when it clears both its bootstrap interval and that floor.
+Arms are compared within (seed, focal model): the same scenario and focal
+seat, only the counterpart differs. Runs in different directories are joined
+on (seed, focal, arm, replicate) after checking that every seed's scenario is
+identical. Each comparison's delta sits next to its noise floor: the same
+delta between two identically configured replicates of a model arm. A shift
+is only worth reading when it clears both its bootstrap interval and that
+floor.
 """
 from __future__ import annotations
 
@@ -14,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from parley_sim import envs
+from parley_sim.core.hashing import digest
 from parley_sim.trace import iter_trace, read_trace
 
 
@@ -35,73 +39,107 @@ def bootstrap_ci(values: list[float], n: int = 2000, seed: int = 0) -> tuple[flo
     return means[int(0.025 * n)], means[int(0.975 * n) - 1]
 
 
-def build_report(out_dir: str | Path) -> dict[str, Any]:
-    out = Path(out_dir)
-    run, cells = load_manifest(out)
-    entry = envs.get(run["config"]["env"])
-    by_key: dict[str, dict[str, Any]] = {}
+def _mean(xs: list[float]) -> float | None:
+    return statistics.fmean(xs) if xs else None
+
+
+def _arm_order(runs: list[dict[str, Any]], present: set[str]) -> list[str]:
+    order = ["soc"]
+    for run in runs:
+        for arm in run["config"].get("extra_arms") or {}:
+            if arm not in order:
+                order.append(arm)
+    order += sorted(present - set(order) - {"aoc"}) + ["aoc"]
+    return [a for a in order if a in present]
+
+
+def build_report(*out_dirs: str | Path) -> dict[str, Any]:
+    runs, env_name = [], None
+    cells: dict[tuple[int, str, str, int], dict[str, Any]] = {}
+    scenario: dict[int, str] = {}
     decisions: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     status_counts: dict[str, int] = defaultdict(int)
-    for c in cells:
-        status_counts[c["status"]] += 1
-        if c["status"] != "done":
-            continue
-        lines = read_trace(out / c["trace"])
-        by_key[c["cell_key"]] = {**c, "metrics": entry.episode_metrics(lines)}
-        if c["arm"] == "soc" or c["replicate"] == 0:
-            decisions[(c["focal"], c["arm"])].extend(entry.decision_rows(lines))
+    spend = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+    for out_dir in out_dirs:
+        out = Path(out_dir)
+        run, rows = load_manifest(out)
+        runs.append(run)
+        if env_name not in (None, run["config"]["env"]):
+            raise ValueError("runs use different environments")
+        env_name = run["config"]["env"]
+        entry = envs.get(env_name)
+        for c in rows:
+            status_counts[c["status"]] += 1
+            for k in spend:
+                spend[k] += (c.get("usage") or {}).get(k, 0)
+            if c["status"] != "done":
+                continue
+            lines = read_trace(out / c["trace"])
+            header = lines[0]
+            fingerprint = digest([header["instance"], header["spec"]["config"],
+                                  header["spec"]["focal_seat"]])
+            if scenario.setdefault(c["seed"], fingerprint) != fingerprint:
+                raise ValueError(f"seed {c['seed']} has a different scenario in {out}")
+            key = (c["seed"], c["focal"], c["arm"], c["replicate"])
+            if key in cells:
+                raise ValueError(f"{key} appears in more than one run")
+            cells[key] = {**c, "metrics": entry.episode_metrics(lines)}
+            if c["replicate"] == 0:
+                decisions[(c["focal"], c["arm"])].extend(entry.decision_rows(lines))
+    entry = envs.get(env_name)
+    arms = _arm_order(runs, {k[2] for k in cells})
+    focals = list(dict.fromkeys(f for run in runs for f in run["config"]["focal_models"]))
+    seeds = sorted({k[0] for k in cells})
 
-    def cell(pair: str, arm: str, r: int) -> dict[str, Any] | None:
-        return by_key.get(f"{pair}-{arm}-r{r}")
+    def value(seed: int, focal: str, arm: str, r: int, name: str) -> float | None:
+        c = cells.get((seed, focal, arm, r))
+        return None if c is None else c["metrics"][name]
 
-    focals = run["config"]["focal_models"]
-    pairs_by_focal: dict[str, set[str]] = defaultdict(set)
-    for c in by_key.values():
-        pairs_by_focal[c["focal"]].add(c["pair_key"])
-
-    metrics: dict[str, dict[str, Any]] = {}
+    means: dict[str, dict[str, dict[str, float | None]]] = {}
+    floors: dict[str, dict[str, dict[str, float | None]]] = {}
+    comparisons: dict[str, dict[str, dict[str, Any]]] = {}
     for focal in focals:
-        metrics[focal] = {}
-        for name, kind in entry.metric_kinds.items():
-            soc, aoc, deltas, nulls = [], [], [], []
-            for pair in sorted(pairs_by_focal[focal]):
-                s, a, a1 = cell(pair, "soc", 0), cell(pair, "aoc", 0), cell(pair, "aoc", 1)
-                sv = s["metrics"][name] if s else None
-                av = a["metrics"][name] if a else None
-                if sv is not None:
-                    soc.append(sv)
-                if av is not None:
-                    aoc.append(av)
-                if sv is not None and av is not None:
-                    deltas.append(av - sv)
-                a1v = a1["metrics"][name] if a1 else None
-                if av is not None and a1v is not None:
-                    nulls.append(abs(a1v - av))
-            lo, hi = bootstrap_ci(deltas)
-            delta = statistics.fmean(deltas) if deltas else None
-            floor = statistics.fmean(nulls) if nulls else None
-            metrics[focal][name] = {
-                "kind": kind, "n_pairs": len(deltas),
-                "soc_mean": statistics.fmean(soc) if soc else None,
-                "aoc_mean": statistics.fmean(aoc) if aoc else None,
-                "delta_mean": delta, "delta_ci": [lo, hi],
-                "noise_floor": floor, "n_null": len(nulls),
-                "clears": bool(deltas) and not (lo <= 0 <= hi)
-                and (floor is None or abs(delta) > floor),
-            }
+        means[focal] = {a: {} for a in arms}
+        floors[focal] = {a: {} for a in arms}
+        for arm in arms:
+            for name in entry.metric_kinds:
+                vals = [v for s in seeds if (v := value(s, focal, arm, 0, name)) is not None]
+                nulls = [abs(b - a) for s in seeds
+                         if (a := value(s, focal, arm, 0, name)) is not None
+                         and (b := value(s, focal, arm, 1, name)) is not None]
+                means[focal][arm][name] = _mean(vals)
+                floors[focal][arm][name] = _mean(nulls)
+        comparisons[focal] = {}
+        for i, a in enumerate(arms):
+            for b in arms[i + 1:]:
+                table = comparisons[focal][f"{b} vs {a}"] = {}
+                for name, kind in entry.metric_kinds.items():
+                    deltas = [vb - va for s in seeds
+                              if (va := value(s, focal, a, 0, name)) is not None
+                              and (vb := value(s, focal, b, 0, name)) is not None]
+                    lo, hi = bootstrap_ci(deltas)
+                    delta = _mean(deltas)
+                    fl = [f for f in (floors[focal][a][name], floors[focal][b][name])
+                          if f is not None]
+                    floor = max(fl) if fl else None
+                    table[name] = {
+                        "kind": kind, "n_pairs": len(deltas), "delta_mean": delta,
+                        "delta_ci": [lo, hi], "noise_floor": floor,
+                        "clears": bool(deltas) and not (lo <= 0 <= hi)
+                        and (floor is None or abs(delta) > floor),
+                    }
 
     acceptance: dict[str, dict[str, dict[str, Any]]] = {}
-    for (focal, arm), rows in sorted(decisions.items()):
+    for (focal, arm), rows in decisions.items():
         table = acceptance.setdefault(focal, {}).setdefault(arm, {})
         for row in rows:
             b = table.setdefault(row["bin"], {"n": 0, "accepted": 0})
             b["n"] += 1
             b["accepted"] += row["accepted"]
-    spend = {k: sum((c.get("usage") or {}).get(k, 0) for c in cells)
-             for k in ("input_tokens", "output_tokens", "cost_usd")}
-    return {"run_id": run["run_id"], "env": run["config"]["env"], "cells": dict(status_counts),
-            "spend": spend,
-            "metrics": metrics, "acceptance_by_offer_quality": acceptance}
+    return {"run_ids": [r["run_id"] for r in runs], "env": env_name,
+            "cells": dict(status_counts), "spend": spend, "arms": arms,
+            "kinds": dict(entry.metric_kinds), "means": means, "noise_floors": floors,
+            "comparisons": comparisons, "acceptance_by_offer_quality": acceptance}
 
 
 def _fmt(v: Any) -> str:
@@ -111,26 +149,33 @@ def _fmt(v: Any) -> str:
 
 
 def render(report: dict[str, Any]) -> str:
-    out = [f"# {report['run_id']} ({report['env']})", "",
+    arms = report["arms"]
+    out = [f"# {' + '.join(report['run_ids'])} ({report['env']})", "",
            "Cells: " + ", ".join(f"{k}={v}" for k, v in sorted(report["cells"].items())),
            "Spend: {input_tokens:,} input + {output_tokens:,} output tokens, "
            "${cost_usd:.2f} reported by provider".format(**report["spend"]), ""]
-    for focal, metrics in report["metrics"].items():
-        out += [f"## {focal}", "",
-                "| metric | kind | SOC | AOC | AOC-SOC [95% CI] | noise floor | n | clears |",
-                "|---|---|---|---|---|---|---|---|"]
-        for name, m in metrics.items():
-            lo, hi = m["delta_ci"]
-            out.append(f"| {name} | {m['kind']} | {_fmt(m['soc_mean'])} | {_fmt(m['aoc_mean'])} "
-                       f"| {_fmt(m['delta_mean'])} [{_fmt(lo)}, {_fmt(hi)}] "
-                       f"| {_fmt(m['noise_floor'])} | {m['n_pairs']} | "
-                       f"{'yes' if m['clears'] else 'no'} |")
+    for focal, by_arm in report["means"].items():
+        out += [f"## {focal}", "", "Means (replicate 0):", "",
+                "| metric | kind | " + " | ".join(arms) + " |",
+                "|---|---|" + "---|" * len(arms)]
+        for name, kind in report["kinds"].items():
+            out.append(f"| {name} | {kind} | "
+                       + " | ".join(_fmt(by_arm[a][name]) for a in arms) + " |")
+        for title, table in report["comparisons"][focal].items():
+            out += ["", f"{title}:", "",
+                    "| metric | delta [95% CI] | noise floor | n | clears |",
+                    "|---|---|---|---|---|"]
+            for name, m in table.items():
+                lo, hi = m["delta_ci"]
+                out.append(f"| {name} | {_fmt(m['delta_mean'])} [{_fmt(lo)}, {_fmt(hi)}] "
+                           f"| {_fmt(m['noise_floor'])} | {m['n_pairs']} | "
+                           f"{'yes' if m['clears'] else 'no'} |")
         table = report["acceptance_by_offer_quality"].get(focal, {})
         if table:
             out += ["", "Acceptance by offer quality (every faced offer, declines included):", "",
                     "| arm | bin | offers | accepted | rate |", "|---|---|---|---|---|"]
-            for arm, bins in table.items():
-                for b, v in bins.items():
+            for arm in arms:
+                for b, v in sorted(table.get(arm, {}).items()):
                     out.append(f"| {arm} | {b} | {v['n']} | {v['accepted']} "
                                f"| {v['accepted'] / v['n']:.2f} |")
         out.append("")

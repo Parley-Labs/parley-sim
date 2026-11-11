@@ -34,6 +34,9 @@ class ModelSpec(BaseModel):
     max_tokens: int = 4096
     timeout_s: float = 120.0
     provider_params: dict[str, Any] | None = None
+    # Condition this seat on a persona; "usersim" = NeMo UserSim's persona and
+    # behavior model (see drivers/usersim_persona.py).
+    persona: Literal["usersim"] | None = None
 
     @model_validator(mode="after")
     def _anthropic_has_no_sampling(self) -> "ModelSpec":
@@ -156,8 +159,11 @@ def _usage_raw(spec: ModelSpec, text: TextInterface, attempts: list[JSON]) -> JS
                    for k in ("input_tokens", "output_tokens")}
     if any("cost_usd" in a.get("usage", {}) for a in attempts):
         usage["cost_usd"] = sum(a.get("usage", {}).get("cost_usd", 0.0) for a in attempts)
-    return {"model": spec.name, "model_id": spec.model, "prompt_version": text.prompt_version,
-            "usage": usage, "attempts": attempts}
+    raw: JSON = {"model": spec.name, "model_id": spec.model, "prompt_version": text.prompt_version,
+                 "usage": usage, "attempts": attempts}
+    if getattr(text, "meta", None):
+        raw["persona"] = text.meta
+    return raw
 
 
 class ProviderHalted(RuntimeError):

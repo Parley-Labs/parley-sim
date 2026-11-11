@@ -1,6 +1,8 @@
-__pycache__/
 *.egg-info/
-.venv/
 .pytest_cache/
+.venv/
+__pycache__/
 dist/
 runs/
+# NVIDIA persona rows: licensed for download, not redistribution
+*.parquet

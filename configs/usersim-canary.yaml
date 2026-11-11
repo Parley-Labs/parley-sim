@@ -1,0 +1,68 @@
+# UserSim persona arm on the pilot's seeds, agents and customer rotation.
+# Only difference from pilot-sd2's aoc arm: each LLM customer is conditioned on the
+# seed's NeMo UserSim persona (persona + OCEAN behavior + interaction style).
+# Personas: `usersim panel --locale en_US --num-personas 200 --out ~/.cache/parley-sim/usersim-en_US.parquet`
+# (NVIDIA dataset licence: never commit that file). Report together with pilot-sd2:
+#   parley-sim report runs/pilot-sd2 runs/usersim-sd2
+run_id: usersim-canary-sd2
+env: support_desk
+seeds: 1000:1002
+lineup:
+- name: opus
+  provider: openai_compat
+  model: anthropic/claude-opus-5.5
+  base_url: https://openrouter.ai/api/v1
+  effort: low
+  max_tokens: 8192
+  provider_params: &id001
+    extra_body:
+      provider:
+        order:
+        - Anthropic
+        allow_fallbacks: false
+      usage:
+        include: true
+- name: sonnet
+  provider: openai_compat
+  model: anthropic/claude-sonnet-5.5
+  base_url: https://openrouter.ai/api/v1
+  effort: low
+  max_tokens: 8192
+  provider_params: *id001
+- name: opus-usersim
+  provider: openai_compat
+  model: anthropic/claude-opus-5.5
+  base_url: https://openrouter.ai/api/v1
+  effort: low
+  max_tokens: 8192
+  provider_params: *id001
+  persona: usersim
+- name: sonnet-usersim
+  provider: openai_compat
+  model: anthropic/claude-sonnet-5.5
+  base_url: https://openrouter.ai/api/v1
+  effort: low
+  max_tokens: 8192
+  provider_params: *id001
+  persona: usersim
+focal_models:
+- opus
+- sonnet
+scripted_counterparts:
+- hardliner
+- reasonable
+- conceder
+adaptive_counterparts:
+- opus
+- sonnet
+self_null_replicates: 1
+concurrency: 4
+max_total_tokens: 200000
+extra_arms:
+  usersim:
+  - opus-usersim
+  - sonnet-usersim
+run_arms:
+- usersim
+persona_file: ~/.cache/parley-sim/usersim-en_US.parquet
+max_refusals: 1

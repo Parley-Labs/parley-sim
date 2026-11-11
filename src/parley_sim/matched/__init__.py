@@ -13,8 +13,9 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -51,6 +52,15 @@ class MatchedConfig(BaseModel):
     focal_models: list[str]
     scripted_counterparts: list[str]
     adaptive_counterparts: list[str]
+    # More model-counterpart arms, run between "soc" and "aoc" (e.g. a UserSim
+    # persona arm); each gets 1 + self_null_replicates cells like "aoc".
+    extra_arms: dict[str, list[str]] = {}
+    # Arms to execute; others are left to another run directory on the same
+    # seeds, which `parley-sim report` joins on (seed, focal, arm, replicate).
+    run_arms: list[str] | None = None
+    # usersim panel parquet (or JSONL of persona dicts) for lineup entries
+    # with `persona: usersim`; one persona per seed, shared across arms.
+    persona_file: str | None = None
     self_null_replicates: int = Field(default=1, ge=0)
     concurrency: int = Field(default=4, ge=1)
     max_total_tokens: int | None = Field(default=None, ge=1)
@@ -77,9 +87,19 @@ class MatchedConfig(BaseModel):
         names = [m.name for m in self.lineup]
         if len(set(names)) != len(names):
             raise ValueError("lineup names must be unique")
-        missing = [n for n in self.focal_models + self.adaptive_counterparts if n not in names]
+        model_refs = self.focal_models + self.adaptive_counterparts + [
+            n for arm in self.extra_arms.values() for n in arm]
+        missing = [n for n in model_refs if n not in names]
         if missing:
             raise ValueError(f"not in lineup: {missing}")
+        for arm, members in self.extra_arms.items():
+            if arm in ("soc", "aoc") or not re.fullmatch(r"[a-z][a-z0-9_]*", arm) or not members:
+                raise ValueError(f"extra arm {arm!r}: needs a new lowercase name and members")
+        unknown_arms = set(self.run_arms or []) - set(self.arm_names())
+        if unknown_arms:
+            raise ValueError(f"run_arms not in {self.arm_names()}: {sorted(unknown_arms)}")
+        if any(m.persona for m in self.lineup) and not self.persona_file:
+            raise ValueError("lineup entries with a persona need persona_file")
         instance = entry.env().generate(parse_seeds(self.seeds)[0], self.env_config)
         seats = entry.env().seats(instance)
         focal = self.focal_seat or entry.focal_seat
@@ -91,13 +111,16 @@ class MatchedConfig(BaseModel):
                     entry.make_policy(name, seat)  # raises on unknown / wrong seat
         return self
 
+    def arm_names(self) -> list[str]:
+        return ["soc", *self.extra_arms, "aoc"]
+
 
 class Cell(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     cell_key: str
     pair_key: str
-    arm: Literal["soc", "aoc"]
+    arm: str
     seed: int
     focal: str
     focal_seat: Seat
@@ -131,15 +154,19 @@ def build_grid(cfg: MatchedConfig) -> list[Cell]:
             seats = {s: f"{prefix}:{names[(i + j) % len(names)]}" for j, s in enumerate(others)}
             return {focal_seat: f"model:{focal}", **seats}
 
+        model_arms = {**cfg.extra_arms, "aoc": cfg.adaptive_counterparts}
         for focal in cfg.focal_models:
             pair_key = f"{cfg.run_id}-{seed}-{focal}"
             cells.append(Cell(cell_key=f"{pair_key}-soc-r0", pair_key=pair_key, arm="soc",
                               seed=seed, focal=focal, focal_seat=focal_seat, replicate=0,
                               seats=fill(cfg.scripted_counterparts, "policy", focal)))
-            for r in range(1 + cfg.self_null_replicates):
-                cells.append(Cell(cell_key=f"{pair_key}-aoc-r{r}", pair_key=pair_key, arm="aoc",
-                                  seed=seed, focal=focal, focal_seat=focal_seat, replicate=r,
-                                  seats=fill(cfg.adaptive_counterparts, "model", focal)))
+            for arm, members in model_arms.items():
+                for r in range(1 + cfg.self_null_replicates):
+                    cells.append(Cell(cell_key=f"{pair_key}-{arm}-r{r}", pair_key=pair_key,
+                                      arm=arm, seed=seed, focal=focal, focal_seat=focal_seat,
+                                      replicate=r, seats=fill(members, "model", focal)))
+    if cfg.run_arms is not None:
+        cells = [c for c in cells if c.arm in cfg.run_arms]
     return cells
 
 
@@ -202,11 +229,22 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
         fh.write(json.dumps(row, sort_keys=True) + "\n")
         fh.flush()
 
-    def agent_for(seat: Seat, name: str) -> ModelSeat | ScriptedSeat:
+    personas = None
+    if cfg.persona_file and any(m.persona for m in cfg.lineup):
+        from parley_sim.drivers.usersim_persona import load_personas
+        personas = load_personas(cfg.persona_file)
+
+    def text_for(spec: ModelSpec, seed: int):
+        if spec.persona == "usersim":
+            from parley_sim.drivers.usersim_persona import UserSimPersonaText, persona_for_seed
+            return UserSimPersonaText(entry.text(), persona_for_seed(personas, seed))
+        return entry.text()
+
+    def agent_for(seat: Seat, name: str, seed: int) -> ModelSeat | ScriptedSeat:
         spec = lineup[name]
         if spec.provider == "scripted":
-            return ScriptedSeat(spec, entry.text(), entry.make_policy(spec.model, seat))
-        return ModelSeat(spec, entry.text(), client_factory(spec), breaker)
+            return ScriptedSeat(spec, text_for(spec, seed), entry.make_policy(spec.model, seat))
+        return ModelSeat(spec, text_for(spec, seed), client_factory(spec), breaker)
 
     async def run_cell(cell: Cell) -> None:
         if cell.cell_key in done:
@@ -230,7 +268,7 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
                                    focal_seat=cell.focal_seat, arm=cell.arm,
                                    pair_key=cell.pair_key, cell_key=cell.cell_key,
                                    replicate=cell.replicate)
-                agents = {seat: agent_for(seat, label.split(":", 1)[1])
+                agents = {seat: agent_for(seat, label.split(":", 1)[1], cell.seed)
                           for seat, label in cell.seats.items() if label.startswith("model:")}
                 with JsonlWriter(trace) as writer:
                     await run_episode(entry, spec, agents, sink=writer)

@@ -64,7 +64,7 @@ def cmd_matched(args: argparse.Namespace) -> int:
 
 
 def cmd_report(args: argparse.Namespace) -> int:
-    report = build_report(args.out)
+    report = build_report(*args.out)
     print(json.dumps(report, indent=2) if args.json else render(report))
     return 0
 
@@ -103,8 +103,8 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("config")
     m.add_argument("--out", required=True)
     m.set_defaults(func=cmd_matched)
-    r = sub.add_parser("report", help="paired report for a run directory")
-    r.add_argument("out")
+    r = sub.add_parser("report", help="paired report across arms for one or more run directories")
+    r.add_argument("out", nargs="+")
     r.add_argument("--json", action="store_true")
     r.set_defaults(func=cmd_report)
     c = sub.add_parser("claims", help="export a blind sample of agent claims for labelling")

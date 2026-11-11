@@ -85,7 +85,8 @@ def test_spend_ceiling_skips_cells(tmp_path):
 def test_report_shape(tmp_path):
     asyncio.run(run_matched(cfg(), tmp_path))
     report = build_report(tmp_path)
-    m = report["metrics"]["scripted-agent"]["deal"]
+    m = report["comparisons"]["scripted-agent"]["aoc vs soc"]["deal"]
+    assert report["arms"] == ["soc", "aoc"]
     assert m["n_pairs"] == 4 and m["kind"] == "relational"
     assert m["noise_floor"] == 0.0  # scripted stand-ins are deterministic
     assert set(report["acceptance_by_offer_quality"]["scripted-agent"]) == {"soc", "aoc"}
@@ -136,3 +137,41 @@ def test_cli_matched_exits_nonzero_when_halted(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "run_matched",
                         lambda c, out: real(c, out, client_factory=lambda s: Suspended()))
     assert cli.main(["matched", str(cfg_path), "--out", str(tmp_path / "run")]) == 2
+
+
+def test_extra_arm_run_separately_joins_the_original_run(tmp_path):
+    base = cfg()
+    asyncio.run(run_matched(base, tmp_path / "pilot"))
+    lineup = base.model_dump()["lineup"] + [
+        {"name": "scripted-reasonable", "provider": "scripted", "model": "reasonable"}]
+    extra = cfg(lineup=lineup, extra_arms={"persona": ["scripted-reasonable"]},
+                run_arms=["persona"])
+    asyncio.run(run_matched(extra, tmp_path / "extra"))
+    _, cells = load_manifest(tmp_path / "extra")
+    assert {c["arm"] for c in cells} == {"persona"} and len(cells) == 4 * 2
+    report = build_report(tmp_path / "pilot", tmp_path / "extra")
+    assert report["arms"] == ["soc", "persona", "aoc"]
+    focal = report["comparisons"]["scripted-agent"]
+    assert set(focal) == {"persona vs soc", "aoc vs soc", "aoc vs persona"}
+    assert focal["aoc vs persona"]["deal"]["n_pairs"] == 4
+    from parley_sim.metrics import render
+    assert "aoc vs persona" in render(report)
+
+
+def test_report_refuses_runs_on_different_scenarios(tmp_path):
+    asyncio.run(run_matched(cfg(), tmp_path / "a"))
+    asyncio.run(run_matched(cfg(env_config={"max_turns": 6}, extra_arms={"x": ["scripted-customer"]},
+                                run_arms=["x"]), tmp_path / "b"))
+    with pytest.raises(ValueError, match="different scenario"):
+        build_report(tmp_path / "a", tmp_path / "b")
+
+
+def test_config_rejects_bad_arms():
+    with pytest.raises(ValidationError):
+        cfg(extra_arms={"aoc": ["scripted-customer"]})
+    with pytest.raises(ValidationError):
+        cfg(run_arms=["nope"])
+    lineup = cfg().model_dump()["lineup"]
+    lineup[1]["persona"] = "usersim"
+    with pytest.raises(ValidationError, match="persona_file"):
+        cfg(lineup=lineup)
