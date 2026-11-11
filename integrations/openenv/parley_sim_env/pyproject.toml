@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openenv-parley-sim"
+version = "0.1.0"
+description = "parley-sim negotiation environments for OpenEnv: your model plays the agent against scripted or adaptive counterparts."
+requires-python = ">=3.11"
+license = "Apache-2.0"
+dependencies = [
+    "parley-sim[openenv,openai,anthropic]",
+    "openenv>=0.12,<0.13",
+    "fastapi>=0.115.0",
+    "pydantic>=2.0.0",
+    "uvicorn>=0.24.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+server = "parley_sim_env.server.app:main"
+
+[tool.setuptools]
+packages = ["parley_sim_env", "parley_sim_env.server"]
+package-dir = {"parley_sim_env" = ".", "parley_sim_env.server" = "server"}
+
+# Until parley-sim is on PyPI, install it from this repository (two levels up).
+# Remove this table once it is published; the env then builds standalone.
+[tool.uv.sources]
+parley-sim = { path = "../../..", editable = false }
