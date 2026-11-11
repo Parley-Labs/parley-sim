@@ -72,7 +72,12 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 
 def cmd_claims(args: argparse.Namespace) -> int:
-    blind, key, n = export_claims(args.out, args.prefix, args.sample, args.seed)
+    exclude = set()
+    for path in args.exclude or []:
+        import csv
+        with open(path) as f:
+            exclude |= {r["id"] for r in csv.DictReader(f)}
+    blind, key, n = export_claims(args.out, args.prefix, args.sample, args.seed, exclude)
     print(f"{n} sentences. Label {blind} (human_label: understated, overstated, accurate "
           f"or none) without looking at {key}, then run: parley-sim kappa {blind} {key}")
     return 0
@@ -115,6 +120,8 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--prefix", required=True)
     c.add_argument("--sample", type=int, default=200)
     c.add_argument("--seed", type=int, default=0)
+    c.add_argument("--exclude", action="append",
+                   help="CSV with an id column (e.g. an earlier round's key) whose sentences to skip")
     c.set_defaults(func=cmd_claims)
     k = sub.add_parser("kappa", help="agreement between the claim rules and human labels")
     k.add_argument("blind")

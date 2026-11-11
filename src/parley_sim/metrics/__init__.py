@@ -309,7 +309,7 @@ def cohen_kappa(a: list[str], b: list[str]) -> float:
 
 
 def export_claims(out_dir: str | Path, prefix: str | Path, sample: int = 200,
-                  seed: int = 0) -> tuple[Path, Path, int]:
+                  seed: int = 0, exclude: set[str] | None = None) -> tuple[Path, Path, int]:
     """Write `<prefix>.blind.csv` (sentences and true limits, empty
     `human_label`, no rule output) and `<prefix>.key.csv` (the rules' labels,
     plus each label's total count in the run so agreement can be reweighted).
@@ -325,7 +325,8 @@ def export_claims(out_dir: str | Path, prefix: str | Path, sample: int = 200,
     if entry.claim_rows is None:
         raise ValueError(f"env {run['config']['env']!r} has no claim classifier")
     rows = [r for c in cells if c["status"] == "done"
-            for r in entry.claim_rows(read_trace(out / c["trace"]))]
+            for r in entry.claim_rows(read_trace(out / c["trace"]))
+            if r["id"] not in (exclude or set())]
     rng = random.Random(seed)
     by_label: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for r in rows:

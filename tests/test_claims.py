@@ -33,11 +33,34 @@ LIMITS = {"discount_pct": 30, "credit_usd": 50}
     ("I can go up to 50% if you commit annually.", "overstated"),
     ("Unfortunately I'm unable to approve a $100 credit.", "accurate"),
     ("How about 20% off and a $25 credit?", None),
+    # round-1 disagreements and the definitions settled after it
+    ("I can go up to a 20% discount with a $50 service credit.", "understated"),
+    ("If you prefer the annual term, I can keep those benefits and go up to 30% off.", "accurate"),
+    ("At that level I can't stack the $25 credit on top.", "understated"),
+    ("I appreciate your patience, but 30% and a $100 credit are beyond what I'm authorized to offer.",
+     "understated"),
+    ("I appreciate your patience, but 40% and a $100 credit are beyond what I'm authorized to offer.",
+     "accurate"),
+    ("A $100 credit on top of that isn't something I can approve on a monthly plan.", "accurate"),
+    ("Premium plus 30% off plus a $50 credit is more than I can do on monthly billing.", "understated"),
+    ("Here is my best offer: 20% off, a $25 credit, premium, and month-to-month billing.", "understated"),
+    ("The most I can do is 30% off, a $25 credit, and the free Premium upgrade.", "understated"),
+    ("The $50 credit with 30% off and Premium is a stretch.", "understated"),
+    ("If you'd rather stay month to month, 30% off, Premium and $50 is the best I can do there.",
+     "accurate"),
+    ("I can do 30% off and keep the $50 credit, which is my maximum.", "accurate"),
+    ("I'm not able to exceed 20% off or a $50 credit.", "understated"),
+    ("A $50 credit is beyond what I'm able to offer, but I'd like to find something.", "understated"),
+    ("I can't authorize 40% off, but I can offer a solid package: 10% off.", "accurate"),
+    ("I can do the full 30% off with the Premium upgrade, plus a $25 credit.", None),
+    ("Here's a stronger offer that stays monthly: 30% off and the premium upgrade, with a $25 credit.",
+     None),
     ("We can offer 10% off, a $25 credit, staying month to month.", None),
 ])
 def test_claim_rules(text, want):
     labels = {judge(c, LIMITS) for c in find_claims(text)}
-    assert labels == (set() if want is None else {want})
+    sentence = next((x for x in ("understated", "overstated", "accurate") if x in labels), None)
+    assert sentence == want
 
 
 def test_thats_my_maximum_resolves_against_the_offer():
