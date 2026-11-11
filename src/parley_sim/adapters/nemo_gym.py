@@ -130,7 +130,7 @@ class ParleySimEnvironmentServerConfig(BaseEnvironmentServerConfig):
 class _AgentSessionClient:
     """parley-sim ProviderClient that answers through one Gym agent session."""
 
-    def __init__(self, server: "ParleySimEnvironmentServer", request: ParleySimEpisodeRequest,
+    def __init__(self, server: ParleySimEnvironmentServer, request: ParleySimEpisodeRequest,
                  cleanup: CleanupContext, target: AgentServerRef, trained: bool):
         self.server, self.request, self.cleanup = server, request, cleanup
         self.target, self.trained = target, trained
@@ -205,7 +205,7 @@ class ParleySimEnvironmentServer(
     request_model = ParleySimEpisodeRequest
     response_model = ParleySimEpisodeResponse
 
-    async def aggregate_metrics(self, body: AggregateMetricsRequest = Body()) -> AggregateMetrics:
+    async def aggregate_metrics(self, body: AggregateMetricsRequest = Body()) -> AggregateMetrics:  # noqa: B008
         rewards = [r["reward"] for r in body.verify_responses if r.get("reward") is not None]
         key: dict[str, Any] = {"mean_reward": statistics.fmean(rewards) if rewards else None,
                                "n_episodes": len(body.verify_responses)}

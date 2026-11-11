@@ -6,3 +6,4 @@ dist/
 runs/
 # NVIDIA persona rows: licensed for download, not redistribution
 *.parquet
+.import_linter_cache/

@@ -1935,6 +1935,7 @@ provides-extras = ["anthropic", "openai", "usersim", "gym", "openenv"]
 dev = [
     { name = "import-linter", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=8.0" },
+    { name = "ruff", specifier = ">=0.6" },
 ]
 
 [[package]]

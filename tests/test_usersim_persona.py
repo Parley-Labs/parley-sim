@@ -6,8 +6,12 @@ import pytest
 pytest.importorskip("usersim")
 
 from parley_sim.cli import smoke_config
-from parley_sim.drivers.usersim_persona import (UserSimPersonaText, load_personas,
-                                                 persona_for_seed, usersim_block)
+from parley_sim.drivers.usersim_persona import (
+    UserSimPersonaText,
+    load_personas,
+    persona_for_seed,
+    usersim_block,
+)
 from parley_sim.envs.support_desk import SupportDesk, SupportDeskText
 from parley_sim.matched import MatchedConfig, run_matched
 from parley_sim.trace import read_trace

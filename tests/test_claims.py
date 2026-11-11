@@ -138,7 +138,7 @@ def test_bluff_shows_up_in_metric_and_round_trips_through_kappa(tmp_path):
 
 def test_export_takes_every_rare_label(tmp_path):
     asyncio.run(run_matched(bluff_cfg(), tmp_path, client_factory=lambda s: Bluffer()))
-    blind, key, n = export_claims(tmp_path, tmp_path / "l" / "c", sample=6)
+    _blind, key, _n = export_claims(tmp_path, tmp_path / "l" / "c", sample=6)
     with key.open() as f:
         rows = list(csv.DictReader(f))
     labels = [r["auto_label"] for r in rows]

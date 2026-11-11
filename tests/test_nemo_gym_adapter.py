@@ -8,19 +8,21 @@ pytest.importorskip("nemo_gym")
 import orjson
 from aiohttp import ClientResponseError, RequestInfo
 from multidict import CIMultiDict, CIMultiDictProxy
-from yarl import URL
-from omegaconf import OmegaConf
-from pydantic import BaseModel, ConfigDict
-
 from nemo_gym.base_responses_api_agent import AgentCloseSessionRequest, AgentSeedSessionRequest
 from nemo_gym.config_types import AgentServerRef, AggregateMetricsRequest
 from nemo_gym.episode_types import EpisodeId, MaterializedTask, TaskId
 from nemo_gym.openai_utils import NeMoGymResponse, NeMoGymResponseCreateParamsNonStreaming
 from nemo_gym.server_utils import BaseServerConfig, ServerClient
+from omegaconf import OmegaConf
+from pydantic import BaseModel, ConfigDict
+from yarl import URL
 
-from parley_sim.adapters.nemo_gym import (ParleySimEnvironmentServer,
-                                          ParleySimEnvironmentServerConfig,
-                                          ParleySimEpisodeRequest, ParleySimTaskInput)
+from parley_sim.adapters.nemo_gym import (
+    ParleySimEnvironmentServer,
+    ParleySimEnvironmentServerConfig,
+    ParleySimEpisodeRequest,
+    ParleySimTaskInput,
+)
 from parley_sim.envs.support_desk import SupportDesk
 from parley_sim.runtime import verify
 

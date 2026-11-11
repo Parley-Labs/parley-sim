@@ -33,7 +33,8 @@ and a client loop, here driving the focal seat with any model:
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 from uuid import uuid4
 
 from openenv.core.client_types import StepResult
@@ -45,10 +46,15 @@ from pydantic import Field, model_validator
 
 from parley_sim import envs
 from parley_sim.core.protocol import JSON, MalformedOutput, Seat
-from parley_sim.drivers.models import (Breaker, ModelSeat, ModelSpec, ProviderClient,
-                                       ScriptedSeat, build_client)
-from parley_sim.runtime.episode import (DecisionRequest, DecisionResult, Episode,
-                                        EpisodeComplete, EpisodeSpec)
+from parley_sim.drivers.models import (
+    Breaker,
+    ModelSeat,
+    ModelSpec,
+    ProviderClient,
+    ScriptedSeat,
+    build_client,
+)
+from parley_sim.runtime.episode import DecisionRequest, DecisionResult, Episode, EpisodeComplete, EpisodeSpec
 
 CLIENT = "client"
 
@@ -61,7 +67,7 @@ class ParleySimAction(Action):
     move: dict[str, Any] | None = Field(default=None, description="Structured env action")
 
     @model_validator(mode="after")
-    def _one(self) -> "ParleySimAction":
+    def _one(self) -> ParleySimAction:
         if (self.text is None) == (self.move is None):
             raise ValueError("give exactly one of text or move")
         return self

@@ -4,8 +4,7 @@ from pathlib import Path
 import pytest
 
 from parley_sim.envs.support_desk import SupportDesk, make_policy
-from parley_sim.runtime import (DecisionRequest, DecisionResult, Episode, EpisodeComplete,
-                           EpisodeSpec, verify)
+from parley_sim.runtime import DecisionRequest, DecisionResult, Episode, EpisodeComplete, EpisodeSpec, verify
 from parley_sim.trace import JsonlWriter, is_complete, read_trace
 
 GOLDEN = Path(__file__).parent / "golden" / "support_desk_seed7_reasonable.jsonl"

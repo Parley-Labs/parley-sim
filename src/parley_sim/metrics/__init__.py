@@ -86,7 +86,7 @@ def _paired_permutation_p(pairs: list[tuple[Any, Any]], stat, n: int = 2000,
 
 def distinct2(texts: list[str]) -> float:
     """Unique word bigrams / all word bigrams across a set of messages."""
-    grams = [g for t in texts for g in zip(t.lower().split(), t.lower().split()[1:])]
+    grams = [g for t in texts for g in zip(t.lower().split(), t.lower().split()[1:], strict=False)]
     return len(set(grams)) / len(grams) if grams else float("nan")
 
 
@@ -100,7 +100,7 @@ def _arm_order(runs: list[dict[str, Any]], present: set[str]) -> list[str]:
         for arm in run["config"].get("extra_arms") or {}:
             if arm not in order:
                 order.append(arm)
-    order += sorted(present - set(order) - {"aoc"}) + ["aoc"]
+    order += [*sorted(present - set(order) - {"aoc"}), "aoc"]
     return [a for a in order if a in present]
 
 
@@ -306,7 +306,7 @@ def cohen_kappa(a: list[str], b: list[str]) -> float:
     if n == 0:
         return float("nan")
     cats = sorted(set(a) | set(b))
-    observed = sum(x == y for x, y in zip(a, b)) / n
+    observed = sum(x == y for x, y in zip(a, b, strict=False)) / n
     expected = sum((a.count(c) / n) * (b.count(c) / n) for c in cats)
     return 1.0 if expected == 1 else (observed - expected) / (1 - expected)
 

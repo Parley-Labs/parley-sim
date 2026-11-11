@@ -116,7 +116,7 @@ class Suspended:
 @pytest.mark.parametrize("client_cls", [Refuser, Suspended])
 def test_breaker_halts_the_run_and_limits_calls(tmp_path, client_cls):
     client = client_cls()
-    manifest = asyncio.run(run_matched(api_cfg(concurrency=1, max_refusals=3), tmp_path,
+    asyncio.run(run_matched(api_cfg(concurrency=1, max_refusals=3), tmp_path,
                                        client_factory=lambda spec: client))
     _, cells = load_manifest(tmp_path)
     statuses = [r["status"] for r in cells]
@@ -130,6 +130,7 @@ def test_breaker_halts_the_run_and_limits_calls(tmp_path, client_cls):
 
 def test_cli_matched_exits_nonzero_when_halted(tmp_path, monkeypatch):
     import yaml
+
     from parley_sim import cli
     cfg_path = tmp_path / "c.yaml"
     cfg_path.write_text(yaml.safe_dump(api_cfg(concurrency=1).model_dump()))

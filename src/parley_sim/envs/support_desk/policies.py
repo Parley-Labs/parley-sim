@@ -74,7 +74,7 @@ class TimeDependent:
         base = priv.get("base_value_if_customer_stays", 0)
         out = []
         for combo in itertools.product(*issues.values()):
-            deal = dict(zip(issues, combo))
+            deal = dict(zip(issues, combo, strict=False))
             if any(issues[k].index(deal[k]) > issues[k].index(lim) for k, lim in limits.items()):
                 continue
             out.append((base + sum(values[k][str(v)] for k, v in deal.items()), deal))
@@ -111,7 +111,7 @@ class TimeDependent:
         # Trade-off strategy: of the deals that meet the target, offer the one
         # closest to the counterpart's last proposal; then the one keeping least
         # surplus above target.
-        value, deal = min(ok, key=lambda x: (distance(x[1]), x[0],
+        _value, deal = min(ok, key=lambda x: (distance(x[1]), x[0],
                                              [issues[k].index(x[1][k]) for k in issues]))
         key = "counter" if observation["transcript"] else "open"
         return {"message": self.voice[key].format(deal=describe(deal)),

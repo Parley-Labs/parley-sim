@@ -1,12 +1,19 @@
 """In-process driver: loops an Episode, answering each request with a seat agent."""
 from __future__ import annotations
 
-from typing import Mapping, Protocol
+from collections.abc import Mapping
+from typing import Protocol
 
 from parley_sim.core.protocol import Seat
 from parley_sim.envs import EnvEntry
-from parley_sim.runtime.episode import (DecisionRequest, DecisionResult, Episode, EpisodeComplete,
-                                   EpisodeSpec, Sink)
+from parley_sim.runtime.episode import (
+    DecisionRequest,
+    DecisionResult,
+    Episode,
+    EpisodeComplete,
+    EpisodeSpec,
+    Sink,
+)
 
 
 class SeatAgent(Protocol):

@@ -11,8 +11,9 @@ environment server, an OpenEnv environment) is a loop around:
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Mapping
+from typing import Any
 
 from parley_sim.core.hashing import digest
 from parley_sim.core.protocol import JSON, Environment, IllegalAction, Policy, Seat

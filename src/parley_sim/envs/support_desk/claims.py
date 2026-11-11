@@ -136,7 +136,7 @@ def find_claims(message: str, offered: dict[str, Any] | None = None) -> list[dic
 
         def add(kind: str, amounts: list[tuple[str, int]]) -> None:
             for issue, value in amounts:
-                found.setdefault((issue, value), kind)
+                found.setdefault((issue, value), kind)  # noqa: B023 (called in this iteration)
 
         for m in _CEIL_BWD.finditer(low):
             add("ceiling", _scoped(low, m, _amounts(_clause_before(low, m.start()))))

@@ -11,8 +11,9 @@ fallback, the reason it was taken.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from parley_sim.core.hashing import canonical_json
 
@@ -32,7 +33,7 @@ class JsonlWriter:
     def close(self) -> None:
         self._f.close()
 
-    def __enter__(self) -> "JsonlWriter":
+    def __enter__(self) -> JsonlWriter:
         return self
 
     def __exit__(self, *exc: object) -> None:

@@ -14,8 +14,9 @@ import hashlib
 import json
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -23,8 +24,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from parley_sim import envs
 from parley_sim.core.protocol import Seat
 from parley_sim.drivers.local import run_episode
-from parley_sim.drivers.models import (Breaker, ModelSeat, ModelSpec, ProviderClient,
-                                       ScriptedSeat, build_client)
+from parley_sim.drivers.models import (
+    Breaker,
+    ModelSeat,
+    ModelSpec,
+    ProviderClient,
+    ScriptedSeat,
+    build_client,
+)
 from parley_sim.runtime.episode import EpisodeSpec
 from parley_sim.trace import JsonlWriter, is_complete, iter_trace
 
@@ -82,7 +89,7 @@ class MatchedConfig(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _references(self) -> "MatchedConfig":
+    def _references(self) -> MatchedConfig:
         entry = envs.get(self.env)
         names = [m.name for m in self.lineup]
         if len(set(names)) != len(names):
@@ -151,7 +158,7 @@ def build_grid(cfg: MatchedConfig) -> list[Cell]:
         others = [s for s in env.seats(env.generate(seed, cfg.env_config)) if s != focal_seat]
 
         def fill(names: list[str], prefix: str, focal: str) -> dict[Seat, str]:
-            seats = {s: f"{prefix}:{names[(i + j) % len(names)]}" for j, s in enumerate(others)}
+            seats = {s: f"{prefix}:{names[(i + j) % len(names)]}" for j, s in enumerate(others)}  # noqa: B023
             return {focal_seat: f"model:{focal}", **seats}
 
         model_arms = {**cfg.extra_arms, "aoc": cfg.adaptive_counterparts}

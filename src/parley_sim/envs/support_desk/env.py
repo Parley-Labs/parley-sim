@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Any, Mapping
+from typing import Any
 
 from parley_sim.core.protocol import JSON, IllegalAction, Seat
 from parley_sim.envs.support_desk import scenario as sc
@@ -67,8 +68,8 @@ class SupportDesk:
         inst = state.inst
         values = inst.agent_values if seat == AGENT else inst.customer_values
         private: JSON = {
-            "option_values": {name: dict(zip(map(str, opts), v))
-                              for (name, opts), v in zip(sc.ISSUES, values)},
+            "option_values": {name: dict(zip(map(str, opts), v, strict=False))
+                              for (name, opts), v in zip(sc.ISSUES, values, strict=False)},
             "value_if_no_deal": self.value(state, seat, None),
         }
         if seat == AGENT:
@@ -153,7 +154,7 @@ class SupportDesk:
         if not ended and turn >= state.inst.max_turns:
             ended, reason = True, "max_turns"
             events.append({"event_type": "out_of_turns"})
-        return replace(state, turn=turn, transcript=state.transcript + (entry,),
+        return replace(state, turn=turn, transcript=(*state.transcript, entry),
                        standing=tuple(sorted(standing.items())), ended=ended, deal=deal,
                        end_reason=reason), events
 

@@ -40,7 +40,7 @@ class ModelSpec(BaseModel):
     persona: Literal["usersim"] | None = None
 
     @model_validator(mode="after")
-    def _anthropic_has_no_sampling(self) -> "ModelSpec":
+    def _anthropic_has_no_sampling(self) -> ModelSpec:
         if self.provider == "anthropic" and self.temperature is not None:
             raise ValueError("the Anthropic API no longer accepts temperature; remove it")
         return self
@@ -248,7 +248,7 @@ class ModelSeat:
                     self.client.complete(system=system, user=user,
                                          schema=self.text.action_schema),
                     timeout=self.spec.timeout_s)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 return self._result(req, attempts, strike="timeout")
             except EpisodeAbort:
                 raise

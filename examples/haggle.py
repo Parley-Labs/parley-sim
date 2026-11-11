@@ -91,13 +91,13 @@ class Haggle:
     def apply(self, state: State, seat: Seat, action: JSON) -> tuple[State, list[JSON]]:
         move = action.get("move", {})
         kind = move.get("type")
-        said = state.transcript + ((seat, action.get("message", "")),)
+        said = (*state.transcript, (seat, action.get("message", "")))
         nxt = replace(state, turn=state.turn + 1, transcript=said)
         if kind == "offer":
             price = move.get("price")
             if not isinstance(price, int) or not 0 <= price <= 100:
                 raise IllegalAction("price must be an integer from 0 to 100")
-            nxt = replace(nxt, offers=state.offers + ((seat, price),))
+            nxt = replace(nxt, offers=(*state.offers, (seat, price)))
         elif kind == "accept":
             standing = self._standing(state, seat)
             if standing is None:

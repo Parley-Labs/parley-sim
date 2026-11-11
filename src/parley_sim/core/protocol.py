@@ -7,7 +7,8 @@ so traces, model I/O and external harness adapters need no per-env codecs.
 """
 from __future__ import annotations
 
-from typing import Any, Mapping, Protocol, runtime_checkable
+from collections.abc import Mapping
+from typing import Any, Protocol, runtime_checkable
 
 Seat = str
 JSON = dict[str, Any]

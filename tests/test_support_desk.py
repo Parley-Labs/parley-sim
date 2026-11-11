@@ -1,9 +1,8 @@
 import pytest
 
-from parley_sim.core.protocol import IllegalAction
+from parley_sim.core.protocol import IllegalAction, MalformedOutput
 from parley_sim.envs.support_desk import SupportDesk, SupportDeskText, make_policy
 from parley_sim.envs.support_desk import scenario as sc
-from parley_sim.core.protocol import MalformedOutput
 
 
 @pytest.mark.parametrize("seed", range(50))
@@ -44,7 +43,7 @@ def test_turn_order_and_out_of_turns():
         env.apply(state, "agent", {"message": "", "move": {"type": "none"}})
     state, _ = env.apply(state, "customer", {"message": "hi", "move": {"type": "none"}})
     assert env.to_act(state) == "agent"
-    state, events = env.apply(state, "agent", {"message": "", "move": {"type": "none"}})
+    state, _events = env.apply(state, "agent", {"message": "", "move": {"type": "none"}})
     assert state.ended and state.end_reason == "max_turns" and env.to_act(state) is None
     assert env.outcome(state) == {"agent": 0.0, "customer": float(state.inst.customer_walkaway)}
 

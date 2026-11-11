@@ -4,14 +4,13 @@ import pytest
 
 pytest.importorskip("openenv")
 
-from fastapi.testclient import TestClient  # noqa: E402
-from openenv.core.env_server.serialization import serialize_observation  # noqa: E402
+from fastapi.testclient import TestClient
+from openenv.core.env_server.serialization import serialize_observation
 
-from parley_sim.adapters.openenv import (ParleySimAction, ParleySimEnv,  # noqa: E402
-                                         ParleySimEnvironment, create_parley_app)
-from parley_sim.envs.support_desk import SupportDesk, make_policy  # noqa: E402
-from parley_sim.envs.support_desk.metrics import episode_metrics  # noqa: E402
-from parley_sim.runtime import verify  # noqa: E402
+from parley_sim.adapters.openenv import ParleySimAction, ParleySimEnv, ParleySimEnvironment, create_parley_app
+from parley_sim.envs.support_desk import SupportDesk, make_policy
+from parley_sim.envs.support_desk.metrics import episode_metrics
+from parley_sim.runtime import verify
 
 SCRIPTED = {"agent": "client", "customer": "policy:reasonable"}
 

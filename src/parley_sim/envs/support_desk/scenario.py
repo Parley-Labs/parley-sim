@@ -7,8 +7,9 @@ so the efficient frontier and Nash bargaining point are exact.
 from __future__ import annotations
 
 import itertools
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 from parley_sim.core.rng import substream
 
@@ -42,7 +43,7 @@ def all_deals() -> list[Deal]:
 
 
 def deal_to_json(deal: Deal) -> dict[str, Any]:
-    return {name: opts[i] for (name, opts), i in zip(ISSUES, deal)}
+    return {name: opts[i] for (name, opts), i in zip(ISSUES, deal, strict=False)}
 
 
 def deal_from_json(obj: Mapping[str, Any]) -> Deal:
@@ -65,17 +66,17 @@ def deal_from_json(obj: Mapping[str, Any]) -> Deal:
 def agent_value(inst: Instance, deal: Deal | None) -> int:
     if deal is None:
         return 0
-    return inst.agent_base + sum(v[i] for v, i in zip(inst.agent_values, deal))
+    return inst.agent_base + sum(v[i] for v, i in zip(inst.agent_values, deal, strict=False))
 
 
 def customer_value(inst: Instance, deal: Deal | None) -> int:
     if deal is None:
         return inst.customer_walkaway
-    return sum(v[i] for v, i in zip(inst.customer_values, deal))
+    return sum(v[i] for v, i in zip(inst.customer_values, deal, strict=False))
 
 
 def authorized(inst: Instance, deal: Deal) -> bool:
-    return all(i <= lim for i, lim in zip(deal, inst.agent_limits))
+    return all(i <= lim for i, lim in zip(deal, inst.agent_limits, strict=False))
 
 
 def _draw(seed: int, attempt: int, max_turns: int) -> Instance:
@@ -145,9 +146,9 @@ def instance_to_json(inst: Instance) -> dict[str, Any]:
         "seed": inst.seed,
         "max_turns": inst.max_turns,
         "agent": {"base": inst.agent_base,
-                  "values": {n: list(v) for n, v in zip(ISSUE_NAMES, inst.agent_values)},
+                  "values": {n: list(v) for n, v in zip(ISSUE_NAMES, inst.agent_values, strict=False)},
                   "limits": {n: ISSUES[k][1][inst.agent_limits[k]]
                              for k, n in enumerate(ISSUE_NAMES) if n in LIMITED_ISSUES}},
-        "customer": {"values": {n: list(v) for n, v in zip(ISSUE_NAMES, inst.customer_values)},
+        "customer": {"values": {n: list(v) for n, v in zip(ISSUE_NAMES, inst.customer_values, strict=False)},
                      "walkaway": inst.customer_walkaway},
     }
