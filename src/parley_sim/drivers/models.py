@@ -64,6 +64,19 @@ class ProviderClient(Protocol):
         """(payload, raw). `payload` is a dict or a JSON string."""
 
 
+def _check_endpoint(name: str, url: str | None) -> None:
+    """Keys travel only over TLS, except to a server on this machine."""
+    if not url:
+        return
+    from urllib.parse import urlparse
+    u = urlparse(url)
+    if u.scheme == "https":
+        return
+    if u.scheme == "http" and u.hostname in ("localhost", "127.0.0.1", "::1"):
+        return
+    raise ValueError(f"{name}: base_url {url!r} must use https (plain http only to localhost)")
+
+
 class AnthropicClient:
     """Structured outputs (`output_config.format`) rather than a forced tool
     call: current models reject forced `tool_choice`. No refusal fallback is
@@ -76,6 +89,7 @@ class AnthropicClient:
         if spec.base_url and not spec.api_key_env:
             raise ValueError(f"{spec.name}: a custom base_url needs api_key_env, so "
                              "ANTHROPIC_API_KEY is never sent to another host")
+        _check_endpoint(spec.name, spec.base_url)
         env = spec.api_key_env or "ANTHROPIC_API_KEY"
         if spec.api_key_env and not os.environ.get(env):
             raise RuntimeError(f"{env} is not set")  # never fall back to ANTHROPIC_API_KEY
@@ -125,6 +139,7 @@ class OpenAIClient:
         if spec.provider == "openai" and base_url and not spec.api_key_env:
             raise ValueError(f"{spec.name}: provider 'openai' with a custom base_url needs "
                              "api_key_env, so OPENAI_API_KEY is never sent to another host")
+        _check_endpoint(spec.name, base_url)
         if spec.provider == "openai_compat" and not spec.base_url:
             raise ValueError(f"{spec.name}: provider 'openai_compat' needs base_url")
         env = spec.api_key_env or ("OPENAI_API_KEY" if spec.provider == "openai"

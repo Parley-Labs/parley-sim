@@ -60,7 +60,8 @@ Each `lineup` entry:
 | `harness` | none | Calls are made by an external harness (used by the NeMo Gym adapter) |
 
 The key is read from `api_key_env` if set, and a key is only ever sent to the
-host it belongs to:
+host it belongs to, over HTTPS (plain `http://` is allowed only to localhost,
+for a local server such as vLLM):
 
 - `openai_compat` requires `base_url` and never falls back to
   `OPENAI_API_KEY`;

@@ -158,3 +158,12 @@ def test_custom_endpoints_need_an_explicit_key_variable(monkeypatch):
         OpenAIClient(ModelSpec(name="o", provider="openai", model="m"))
     monkeypatch.setenv("OPENAI_BASE_URL", "")
     OpenAIClient(ModelSpec(name="o", provider="openai", model="m"))  # default endpoint is fine
+
+
+def test_keys_travel_only_over_tls_except_to_localhost(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "placeholder")
+    with pytest.raises(ValueError, match="https"):
+        OpenAIClient(ModelSpec(name="o", provider="openai_compat", model="m",
+                               base_url="http://gateway.example/v1"))
+    OpenAIClient(ModelSpec(name="o", provider="openai_compat", model="m",
+                           base_url="http://localhost:8000/v1"))
