@@ -366,3 +366,24 @@ def test_focal_actions_are_bounded_and_moves_keep_only_schema_keys():
     decision = focal_decisions(env)[0]
     assert decision["submitted"] == decision["applied"] == {"message": "hi", "move": {"type": "none"}}
     assert decision["explanation"] == "wait" and decision["strike"] is None
+
+
+def test_only_allowlisted_routes_are_served_and_none_build_environments():
+    made = []
+    app = create_parley_app(**PEER, client_factory=recording_factory(made))
+    served = {getattr(r, "path", None) for r in app.routes}
+    assert served == {"/ws", "/health", "/schema", "/metadata", "/openapi.json", "/docs",
+                      "/docs/oauth2-redirect", "/redoc", "/reset", "/step", "/state", "/mcp"}
+    client = TestClient(app)
+    startup = len(made)
+    assert client.get("/metadata").json()["name"] == "ParleySimEnvironment"
+    assert client.get("/schema").status_code == 200 and client.get("/health").status_code == 200
+    for method, path in [("GET", "/parley_sim/splits"), ("POST", "/parley_sim/tasks"),
+                         ("GET", "/list_environments")]:  # OpenEnv's task routes: dropped
+        assert client.request(method, path, json={}).status_code == 404, path
+    from starlette.websockets import WebSocketDisconnect
+    with pytest.raises(WebSocketDisconnect):  # the MCP WebSocket is dropped too
+        with client.websocket_connect("/mcp") as ws:
+            ws.send_text(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+            ws.receive_text()
+    assert len(made) == startup  # nothing above built an environment or a provider client

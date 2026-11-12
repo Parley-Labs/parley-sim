@@ -206,8 +206,11 @@ model being trained only ever sees the observations the client passes it.
 
 Play goes only through OpenEnv's WebSocket sessions (`/ws`, which
 `ParleySimEnv` uses), where the session limit, idle timeout and refusal
-breaker apply. The stateless HTTP `/reset`, `/step`, `/state` and `/mcp` routes answer
-405, and OpenEnv's web interface is never mounted, whatever
+breaker apply. The server serves only `/ws`, `/health`, `/schema`,
+`/metadata` and the API docs; every other OpenEnv route is dropped, since most
+of them build an environment per request outside those limits. The stateless
+`/reset`, `/step`, `/state` and `/mcp` routes answer 405 with a pointer to
+`/ws`, and OpenEnv's web interface is never mounted, whatever
 `ENABLE_WEB_INTERFACE` says, because it would share one environment between
 all its users. If you deploy with `openenv push`, pass `--no-interface`.
 
