@@ -90,8 +90,11 @@ counterpart, and give the matching rows the same `pair_key`.
 The focal seat plays one growing conversation (`focal_conversation`, on by
 default): each request resends the earlier turns, with the agent's own output
 items exactly as it returned them, then adds what the counterpart did since.
-Each prompt therefore extends the previous one token for token, which is what
-NeMo Gym needs to treat an episode as one continuous training sample.
+Each prompt therefore extends the previous one at the message level. Token
+continuity, which NeMo Gym needs to treat an episode as one continuous
+training sample, also requires the agent's model server to tokenize the
+resent output items into the same token ids it sampled. The adapter does not
+check that; each output item's `prompt_token_ids` let a trainer verify it.
 
 The episode result carries:
 

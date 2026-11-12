@@ -68,8 +68,8 @@ for a local server such as vLLM):
   `OPENAI_API_KEY`;
 - `openai` with a custom `base_url` requires an explicit `api_key_env`, so
   `OPENAI_API_KEY` is never sent to another host;
-- `openai` also treats `OPENAI_BASE_URL`, which the OpenAI SDK reads, as a
-  custom endpoint;
+- `openai` and `anthropic` also treat `OPENAI_BASE_URL` and
+  `ANTHROPIC_BASE_URL`, which their SDKs read, as custom endpoints;
 - `anthropic` with a custom `base_url` requires an explicit `api_key_env`,
   and if `api_key_env` names a variable that
   is unset, it fails instead of falling back to `ANTHROPIC_API_KEY`.

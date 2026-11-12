@@ -108,6 +108,14 @@ def _arm_order(runs: list[dict[str, Any]], present: set[str]) -> list[str]:
     return [a for a in order if a in present]
 
 
+def _arm_members(config: dict[str, Any], arm: str) -> list[str]:
+    if arm == "soc":
+        return []
+    if arm == "aoc":
+        return list(config["adaptive_counterparts"])
+    return list((config.get("extra_arms") or {}).get(arm) or [])
+
+
 def _arm_definition(config: dict[str, Any], arm: str) -> Any:
     """What fills the counterpart seats in `arm`: policy names for soc, the
     lineup specs of its members for model arms."""
@@ -131,6 +139,7 @@ def build_report(*out_dirs: str | Path,
     spend = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
     arm_defs: dict[str, tuple[Any, str]] = {}
     focal_defs: dict[str, tuple[str, str]] = {}
+    persona_defs: dict[str, tuple[str, str]] = {}
     for out_dir in out_dirs:
         out = Path(out_dir)
         run, rows = load_manifest(out)
@@ -145,6 +154,13 @@ def build_report(*out_dirs: str | Path,
                 raise ValueError(f"focal model {focal!r} is configured differently in "
                                  f"{prior[1]} and {out}")
         for arm in {c["arm"] for c in rows if c["status"] == "done"}:
+            members = _arm_members(run["config"], arm)
+            if any(lineup.get(n, {}).get("persona") for n in members) and run.get("persona_digest"):
+                # The same seed must get the same persona in every run of this arm.
+                seen = persona_defs.setdefault(arm, (run["persona_digest"], str(out)))
+                if seen[0] != run["persona_digest"]:
+                    raise ValueError(f"arm {arm!r} uses a different persona panel in "
+                                     f"{seen[1]} and {out}")
             definition = _arm_definition(run["config"], arm)
             prior = arm_defs.setdefault(arm, (definition, str(out)))
             if prior[0] != definition:
@@ -445,9 +461,11 @@ def claims_kappa(blind_csv: str | Path, key_csv: str | Path) -> dict[str, Any]:
     a, h = [p[0] for p in pairs], [p[1] for p in pairs]
     confusion = {x: {y: sum(1 for p in pairs if p == (x, y)) for y in CLAIM_LABELS}
                  for x in CLAIM_LABELS}
-    # Every sampled rule label must have labelled rows, or the reweighting
-    # would silently describe only part of the pool.
-    complete = bool(totals) and set(totals) <= {auto_label for auto_label, _ in pairs}
+    # Every sampled rule label must have a pool total and labelled rows, or
+    # the reweighting would silently describe only part of the pool.
+    sampled = {r["auto_label"] for r in key_rows}
+    complete = (bool(totals) and sampled <= set(totals)
+                and sampled <= {auto_label for auto_label, _ in pairs})
     weighted = _weighted_bluff_agreement(pairs, totals) if complete else None
     return {"n": len(pairs), "invalid": invalid, "weighted_to_pool": weighted,
             "kappa_understated": cohen_kappa(["understated" if x == "understated" else "other"

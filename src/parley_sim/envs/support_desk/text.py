@@ -5,7 +5,6 @@ from typing import Any
 
 from parley_sim.core.protocol import JSON, MalformedOutput
 from parley_sim.envs.support_desk import scenario as sc
-from parley_sim.envs.support_desk.env import MAX_MESSAGE_CHARS
 
 PROMPT_VERSION = "sd-2"
 
@@ -109,7 +108,8 @@ def _same_move(entry: JSON, submitted: JSON) -> bool:
                 return False
         except (ValueError, TypeError):
             return False
-    return entry["message"] == str(submitted.get("message") or "")[:MAX_MESSAGE_CHARS]
+    # Compared in full: a message the environment truncated counts as changed.
+    return entry["message"] == str(submitted.get("message") or "")
 
 
 class SupportDeskText:
@@ -161,8 +161,9 @@ class SupportDeskText:
                 lines.append("[You] Your last turn produced no usable reply, so it was recorded "
                              f"as: {_describe_entry(e)}")
             elif not _same_move(e, submitted):
-                lines.append("[You] Your last reply could not be applied as sent (it was not a "
-                             f"legal move here), so it was recorded as: {_describe_entry(e)}")
+                lines.append("[You] Your last reply could not be applied as sent (an illegal "
+                             "move becomes no move, and a long message is cut short), so it "
+                             f"was recorded as: {_describe_entry(e)}")
         theirs, mine = observation["their_standing_offer"], observation["your_standing_offer"]
         return "\n".join([
             *(lines or ["The counterpart has not moved since your last turn."]),

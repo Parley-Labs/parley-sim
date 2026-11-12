@@ -156,3 +156,12 @@ def test_weighted_agreement_needs_every_sampled_label_labelled(tmp_path):
     assert claims_kappa(blind, key)["weighted_to_pool"] is None
     blind.write_text(blind.read_text().replace("3,30,50,s,\n", "3,30,50,s,accurate\n"))
     assert claims_kappa(blind, key)["weighted_to_pool"]["precision_understated"] == 1.0
+
+
+def test_weighted_agreement_needs_a_pool_total_for_every_label(tmp_path):
+    key, blind = tmp_path / "k.csv", tmp_path / "b.csv"
+    key.write_text("id,auto_label,arm,label_model,label_total_in_run\n"
+                   "1,understated,aoc,m,10\n2,none,aoc,m,\n")
+    blind.write_text("id,limit_discount_pct,limit_credit_usd,sentence,human_label\n"
+                     "1,30,50,s,understated\n2,30,50,s,none\n")
+    assert claims_kappa(blind, key)["weighted_to_pool"] is None
