@@ -11,18 +11,29 @@ limits, negotiating discount, credit, upgrade and billing term.
 
 ## Run it
 
-Locally, from this folder:
+Locally, from this folder (`integrations/openenv/parley_sim_env`: `--project .`
+means the current directory, so run it here):
 
 ```bash
-uv run --project . server            # http://localhost:8000
+uv run --project . server            # http://localhost:8000, bound to 127.0.0.1
 ```
 
 With Docker, from the parley-sim repository root:
 
 ```bash
 docker build -f integrations/openenv/parley_sim_env/server/Dockerfile -t parley-sim-env .
-docker run -p 8000:8000 parley-sim-env
+docker run -p 127.0.0.1:8000:8000 parley-sim-env
 ```
+
+The server has no authentication. `-p 127.0.0.1:8000:8000` publishes the port
+on this machine only; without the `127.0.0.1:` prefix, Docker publishes it on
+every interface.
+
+If you deploy with `openenv push`, pass `--no-interface`. By default `openenv
+push` turns on OpenEnv's web interface, which would share one environment
+between all its users; this server never mounts it (it logs a warning and
+ignores `ENABLE_WEB_INTERFACE`), so without the flag the Space's page points
+at a `/web` path that does not exist.
 
 ## Play an episode
 
@@ -41,8 +52,18 @@ with ParleySimEnv(base_url="http://localhost:8000").sync() as env:
 
 A reply that doesn't parse, or proposes a deal the agent isn't authorized to
 offer, is recorded as a strike and replaced by a no-op move, exactly as in
-parley-sim's own runs. `env.state()` also carries the full episode trace,
-including the counterpart's moves.
+parley-sim's own runs. A reply may be up to 65,536 characters. Once the episode
+is done, `env.state()` also carries the full episode trace, including the
+counterpart's moves, unless the server runs with `PARLEY_RELEASE_TRACE=never`
+(see below).
+
+Play goes through OpenEnv's WebSocket sessions, which `ParleySimEnv` uses. The
+stateless HTTP `/reset`, `/step` and `/state` routes answer 405: each such call
+would build a fresh environment outside the session limit, idle timeout and
+refusal breaker. `ParleySimEnv` waits up to 300 seconds for each reply (OpenEnv's
+default is 60), because one LLM counterpart turn can take two attempts of its
+`timeout_s` (120 seconds by default). If you raise `timeout_s`, raise it too:
+`ParleySimEnv(base_url=..., message_timeout_s=600)`.
 
 ## Configure the counterpart
 
@@ -57,22 +78,28 @@ The server reads its configuration from environment variables:
 | `PARLEY_REWARD_METRIC` | `focal_surplus_share` | Which episode metric is the reward. |
 | `PARLEY_MAX_REFUSALS` | `3` | Stop a session after this many provider refusals. |
 | `MAX_CONCURRENT_ENVS` | `8` | Concurrent sessions. |
-| `PARLEY_SESSION_TIMEOUT` | `600` | Close sessions idle this many seconds. |
+| `PARLEY_SESSION_TIMEOUT` | `600` | Close sessions idle this many seconds. Must be at least twice the largest `timeout_s` of a seated lineup model, or the server refuses to start. |
+| `PARLEY_RELEASE_TRACE` | `after_done` | `after_done`: `env.state()` carries the full trace once an episode is done. `never`: it only ever shows what your model's seat saw, plus the outcomes and metrics. Any other value fails startup. |
 
 The server has no authentication, and with model counterparts every session
 spends your provider keys. `uv run --project . server` binds to localhost; the
 Docker image listens on all interfaces inside the container, so publish its
-port only on a trusted network.
+port as `-p 127.0.0.1:8000:8000`, and expose it beyond this machine only on a
+trusted network.
 
 During an episode, `env.state()` shows only what your model's seat can see.
-The full trace, with the scenario, ground truth and the counterpart's
-decisions, is available once the episode is done.
+Once an episode ends, its full trace, with the scenario, ground truth and the
+counterpart's decisions, is released. The client chooses the seeds, so it can
+end an episode at once, read that trace, and replay the same seed with the
+counterpart's private values in hand. When the client must not learn
+counterpart information (for example, when training on the episodes), run the
+server with `PARLEY_RELEASE_TRACE=never`.
 
 Scripted customers: `policy:hardliner`, `policy:reasonable`, `policy:conceder`.
 An LLM customer needs a lineup entry and its provider key at runtime:
 
 ```bash
-docker run -p 8000:8000 -e OPENROUTER_API_KEY \
+docker run -p 127.0.0.1:8000:8000 -e OPENROUTER_API_KEY \
   -e PARLEY_SEATS='{"agent":"client","customer":"model:peer"}' \
   -e PARLEY_LINEUP='[{"name":"peer","provider":"openai_compat","model":"anthropic/claude-sonnet-5.5","base_url":"https://openrouter.ai/api/v1"}]' \
   parley-sim-env

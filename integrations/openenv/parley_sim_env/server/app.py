@@ -11,7 +11,15 @@ Configured from the process environment, so one image serves any arm:
     PARLEY_REWARD_METRIC  reward metric (default "focal_surplus_share")
     PARLEY_MAX_REFUSALS   stop a session after this many provider refusals (default 3)
     MAX_CONCURRENT_ENVS   concurrent sessions (default 8)
-    PARLEY_SESSION_TIMEOUT  close sessions idle this many seconds (default 600)
+    PARLEY_SESSION_TIMEOUT  close sessions idle this many seconds (default 600); must be at
+                          least 2 x the largest timeout_s of a seated lineup model
+    PARLEY_RELEASE_TRACE  "after_done" (default): state() carries the full trace once an
+                          episode is done; "never": state() only ever shows what the
+                          focal seat saw, plus outcomes and metrics
+
+Play goes only through WebSocket sessions (/ws); the stateless HTTP /reset, /step
+and /state routes are disabled, and OpenEnv's web interface is never mounted
+(deploy with `openenv push --no-interface`).
 
 The server has no authentication. Expose it only on a trusted network.
 
@@ -25,7 +33,7 @@ import json
 import os
 from typing import Any
 
-from parley_sim.adapters.openenv import create_parley_app
+from parley_sim.adapters.openenv import RELEASE_TRACE, create_parley_app
 
 DEFAULT_SEATS = {"agent": "client", "customer": "policy:reasonable"}
 
@@ -40,6 +48,13 @@ def _json(name: str, default: Any) -> Any:
         raise SystemExit(f"{name} is not valid JSON: {exc}") from exc
 
 
+def _choice(name: str, choices: tuple[str, ...], default: str) -> str:
+    value = (os.getenv(name) or "").strip() or default
+    if value not in choices:
+        raise SystemExit(f"{name} must be one of {', '.join(choices)}, not {value!r}")
+    return value
+
+
 def build_app():
     return create_parley_app(
         env=os.getenv("PARLEY_ENV", "support_desk"),
@@ -50,6 +65,7 @@ def build_app():
         max_refusals=int(os.getenv("PARLEY_MAX_REFUSALS", "3")),
         max_concurrent_envs=int(os.getenv("MAX_CONCURRENT_ENVS", "8")),
         session_timeout_s=float(os.getenv("PARLEY_SESSION_TIMEOUT", "600")),
+        release_trace=_choice("PARLEY_RELEASE_TRACE", RELEASE_TRACE, "after_done"),
     )
 
 
