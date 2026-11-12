@@ -231,3 +231,27 @@ def test_report_refuses_a_focal_name_that_means_different_models(tmp_path):
     asyncio.run(run_matched(other, tmp_path / "b"))
     with pytest.raises(ValueError, match="configured differently"):
         build_report(tmp_path / "a", tmp_path / "b")
+
+
+def test_old_manifests_and_explicit_defaults_join_but_real_differences_do_not(tmp_path):
+    import json as _json
+    base = cfg()
+    asyncio.run(run_matched(base, tmp_path / "a"))
+    lineup = base.model_dump()["lineup"] + [
+        {"name": "scripted-reasonable", "provider": "scripted", "model": "reasonable"}]
+    asyncio.run(run_matched(cfg(lineup=lineup, extra_arms={"persona": ["scripted-reasonable"]},
+                                run_arms=["persona"]), tmp_path / "b"))
+    # Make run "a" look like a manifest written before `conversation` existed.
+    m = tmp_path / "a" / "manifest.jsonl"
+    rows = [_json.loads(l) for l in m.read_text().splitlines()]
+    for spec in rows[0]["config"]["lineup"]:
+        spec.pop("conversation", None)
+    m.write_text("".join(_json.dumps(r) + "\n" for r in rows))
+    build_report(tmp_path / "a", tmp_path / "b")  # missing and explicit default are the same
+    asyncio.run(run_matched(base, tmp_path / "a"))  # resuming the old run keeps it joinable
+    build_report(tmp_path / "a", tmp_path / "b")
+    lineup[0] = {**lineup[0], "conversation": True}
+    asyncio.run(run_matched(cfg(run_id="c", lineup=lineup, extra_arms={"persona": ["scripted-reasonable"]},
+                                run_arms=["persona"]), tmp_path / "c"))
+    with pytest.raises(ValueError, match="configured differently"):
+        build_report(tmp_path / "a", tmp_path / "c")

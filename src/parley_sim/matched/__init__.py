@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from parley_sim import envs
 from parley_sim.core.protocol import Seat
+from parley_sim.core.specs import canonical_model_spec
 from parley_sim.drivers.local import run_episode
 from parley_sim.drivers.models import (
     Breaker,
@@ -153,9 +154,8 @@ def config_hash(cfg: MatchedConfig) -> str:
     data = cfg.model_dump()
     for k in _OPERATIONAL:
         data.pop(k)
-    for spec in data["lineup"]:  # fields added later hash as before while left at their default
-        if not spec.get("conversation"):
-            spec.pop("conversation", None)
+    # Fields added later hash as before while left at their default.
+    data["lineup"] = [canonical_model_spec(spec) for spec in data["lineup"]]
     return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
 

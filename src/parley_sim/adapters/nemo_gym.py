@@ -188,23 +188,35 @@ class _AgentSessionClient:
         if history is None:
             return [{"role": "system", "content": system}, {"role": "user", "content": user}]
         if len(history) != len(self.exchanges):
-            raise ValueError("conversation history is out of step with the agent session")
+            # A bug, not a seat failure: end the episode rather than score fallbacks.
+            raise EpisodeAbort("conversation history is out of step with the agent session",
+                               retryable=False)
         items: list[Any] = [{"role": "system", "content": system}]
         for prior_user, output in self.exchanges:
             items += [{"role": "user", "content": prior_user}, *output]
         return [*items, {"role": "user", "content": user}]
 
     def training_response(self) -> dict[str, Any] | None:
-        """Every reply of this conversation seat as one Gym-native response."""
-        if not self.calls:
+        """Every reply of this conversation seat as one valid NeMoGymResponse:
+        the last reply's envelope, the conversation's output items in order,
+        and usage covering the whole conversation (input = the final prompt,
+        which contains every earlier turn; output = all generated tokens)."""
+        kept = [c["response"] for c in self.calls if not c.get("refused")]
+        if not kept:
             return None
-        responses = [c["response"] for c in self.calls]
-        usage = [r.get("usage") or {} for r in responses]
-        return {"id": f"parley-{self.request.episode_id.rollout_id}-{self.target.name}",
-                "object": "response", "model": responses[-1].get("model", ""),
-                "output": [item for _, output in self.exchanges for item in output],
-                "usage": {"input_tokens": usage[-1].get("input_tokens", 0) or 0,
-                          "output_tokens": sum(u.get("output_tokens", 0) or 0 for u in usage)}}
+        usage = [r.get("usage") or {} for r in kept]
+        n_in = usage[-1].get("input_tokens", 0) or 0
+        n_out = sum(u.get("output_tokens", 0) or 0 for u in usage)
+        envelope = {**kept[-1],
+                    "id": f"parley-{self.request.episode_id.rollout_id}-{self.target.name}",
+                    "output": [item for _, output in self.exchanges for item in output],
+                    "usage": {"input_tokens": n_in, "output_tokens": n_out,
+                              "total_tokens": n_in + n_out,
+                              "input_tokens_details": {"cached_tokens": 0},
+                              "output_tokens_details": {"reasoning_tokens": sum(
+                                  (u.get("output_tokens_details") or {}).get("reasoning_tokens", 0)
+                                  or 0 for u in usage)}}}
+        return NeMoGymResponse.model_validate(envelope).model_dump(mode="json")
 
     async def complete(self, *, system: str, user: str, schema: JSON,
                        history: list[JSON] | None = None) -> tuple[Any, JSON]:
@@ -230,12 +242,17 @@ class _AgentSessionClient:
             raise EpisodeAbort(f"agent {self.target.name}: {_describe(error)}"[:2000],
                                retryable=_is_retryable(error)) from error
         dumped = result.model_dump(mode="json")
+        text, refusal, reasoning = _read_output(result)
+        if history is not None:
+            self.calls.append({"request": params, "response": dumped,
+                               "refused": refusal is not None and not text})
+        if refusal is not None and not text:
+            # Not part of the conversation: the seat records no exchange for it
+            # either, so both sides stay in step and the next turn resumes from
+            # the last reply the agent actually gave.
+            raise ProviderRefusal(refusal or "refusal")
         if history is not None:
             self.exchanges.append((user, dumped["output"]))
-            self.calls.append({"request": params, "response": dumped})
-        text, refusal, reasoning = _read_output(result)
-        if refusal is not None and not text:
-            raise ProviderRefusal(refusal or "refusal")
         usage = result.usage
         return text, {
             "served_model": result.model, "agent_server": self.target.name,

@@ -299,7 +299,6 @@ class ModelSeat:
 
     async def decide(self, req: DecisionRequest) -> DecisionResult:
         system, user = self._prompt(req.observation)
-        self._previous = req.observation
         attempts: list[JSON] = []
         error: str | None = None
         for _ in range(2):
@@ -334,6 +333,10 @@ class ModelSeat:
             if self.spec.conversation:
                 self.history.append({"user": user, "assistant": payload if isinstance(payload, str)
                                      else json.dumps(payload)})
+                # Only a turn that reached the conversation moves its start point:
+                # after a refused or failed call, the next update still covers
+                # everything since the last reply the model actually gave.
+                self._previous = req.observation
             try:
                 action, explanation = self.text.parse(payload)
             except MalformedOutput as exc:
