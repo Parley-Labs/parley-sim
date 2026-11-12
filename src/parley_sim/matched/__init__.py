@@ -253,9 +253,14 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
         prior = next((r for r in rows if r["type"] == "run"), None)
         if prior is None or prior["config_hash"] != chash:
             raise RuntimeError(f"{manifest} was built from a different config; use a new --out")
-        if prior.get("persona_digest") not in (None, run_row.get("persona_digest")):
-            raise RuntimeError(f"{manifest} was built from a different persona panel; "
-                               "use a new --out")
+        prior_digest, digest_now = prior.get("persona_digest"), run_row.get("persona_digest")
+        done_before = any(r["type"] == "cell" and r["status"] == "done" for r in rows)
+        if prior_digest != digest_now and (prior_digest is not None or done_before):
+            # A run that recorded no panel but has finished cells can't show
+            # which panel those cells used, so they can't be joined to this one.
+            raise RuntimeError(f"{manifest} was built from a different persona panel"
+                               + ("" if prior_digest is not None else " (or one it did not record)")
+                               + "; use a new --out")
         for k in _USAGE_KEYS:
             prior_usage[k] += (prior.get("prior_usage") or {}).get(k, 0)
         cell_rows = [r for r in rows if r["type"] == "cell"]

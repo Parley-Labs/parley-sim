@@ -100,8 +100,11 @@ For a model that might not support structured outputs everywhere, use
 - **Refusal breaker.** All seats in a run share a breaker. It trips on any
   401, 402, 403 or 404 (bad key, no credit, no access, unknown model: every
   later call would fail too), or after `max_refusals` provider refusals.
-  Once tripped, no further calls are made, the remaining cells are recorded
-  as halted, and `matched` exits with code 2 and a `RUN HALTED` message.
+  Once tripped, no further model calls are made and cells that have not
+  started are recorded as `skipped_halted`. Cells already running are not
+  cancelled: one that needs another call ends `errored`, and one that needs
+  none can still finish `done`. `matched` exits with code 2 and a
+  `RUN HALTED` message.
   Repeated refusals can get a provider account suspended; find the cause
   before re-running.
 - **Rejected requests.** A 400 or 422 means the request itself is wrong (an

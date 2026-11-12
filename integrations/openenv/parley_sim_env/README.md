@@ -58,7 +58,7 @@ counterpart's moves, unless the server runs with `PARLEY_RELEASE_TRACE=never`
 (see below).
 
 Play goes through OpenEnv's WebSocket sessions, which `ParleySimEnv` uses. The
-stateless HTTP `/reset`, `/step` and `/state` routes answer 405: each such call
+stateless HTTP `/reset`, `/step`, `/state` and `/mcp` routes answer 405: each such call
 would build a fresh environment outside the session limit, idle timeout and
 refusal breaker. `ParleySimEnv` waits up to 300 seconds for each reply (OpenEnv's
 default is 60), because one LLM counterpart turn can take two attempts of its
@@ -91,9 +91,12 @@ During an episode, `env.state()` shows only what your model's seat can see.
 Once an episode ends, its full trace, with the scenario, ground truth and the
 counterpart's decisions, is released. The client chooses the seeds, so it can
 end an episode at once, read that trace, and replay the same seed with the
-counterpart's private values in hand. When the client must not learn
-counterpart information (for example, when training on the episodes), run the
-server with `PARLEY_RELEASE_TRACE=never`.
+counterpart's private values in hand. With `PARLEY_RELEASE_TRACE=never`,
+`state()` never releases the trace, so counterpart decisions stay in the
+server. That does not make the scenario secret: the generator is public and
+deterministic, so a client that picks a seed can compute the counterpart's
+private values itself. The model being trained only ever sees what your
+client passes it.
 
 Scripted customers: `policy:hardliner`, `policy:reasonable`, `policy:conceder`.
 An LLM customer needs a lineup entry and its provider key at runtime:
