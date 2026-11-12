@@ -102,6 +102,8 @@ class MatchedConfig(BaseModel):
         for arm, members in self.extra_arms.items():
             if arm in ("soc", "aoc") or not re.fullmatch(r"[a-z][a-z0-9_]*", arm) or not members:
                 raise ValueError(f"extra arm {arm!r}: needs a new lowercase name and members")
+        if self.run_arms is not None and not self.run_arms:
+            raise ValueError("run_arms is empty: list the arms to run, or leave it out for all")
         unknown_arms = set(self.run_arms or []) - set(self.arm_names())
         if unknown_arms:
             raise ValueError(f"run_arms not in {self.arm_names()}: {sorted(unknown_arms)}")
@@ -112,10 +114,18 @@ class MatchedConfig(BaseModel):
         focal = self.focal_seat or entry.focal_seat
         if focal not in seats:
             raise ValueError(f"focal_seat {focal!r} is not one of {list(seats)}")
+        specs = {m.name: m for m in self.lineup}
         for seat in seats:
             if seat != focal:
                 for name in self.scripted_counterparts:
                     entry.make_policy(name, seat)  # raises on unknown / wrong seat
+                for arm in [self.adaptive_counterparts, *self.extra_arms.values()]:
+                    for name in arm:  # a scripted lineup entry plays a policy in that seat
+                        if specs[name].provider == "scripted":
+                            entry.make_policy(specs[name].model, seat)
+        for name in self.focal_models:
+            if specs[name].provider == "scripted":
+                entry.make_policy(specs[name].model, focal)
         return self
 
     def arm_names(self) -> list[str]:
@@ -269,6 +279,7 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
                             "trace": None, "usage": {"input_tokens": 0, "output_tokens": 0}})
                     return
             trace = out / "traces" / f"{cell.cell_key}.jsonl"
+            trace.unlink(missing_ok=True)  # never attribute an earlier attempt's trace to this one
             status, error = "done", None
             try:
                 spec = EpisodeSpec(seed=cell.seed, seats=cell.seats, config=cfg.env_config,
@@ -281,9 +292,12 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
                     await run_episode(entry, spec, agents, sink=writer)
             except Exception as exc:  # one bad cell never takes down the grid
                 status, error = "errored", repr(exc)
+            if trace.exists() and trace.stat().st_size == 0:
+                trace.unlink()  # the episode failed before writing its header
             usage = _usage(trace) if trace.exists() else {"input_tokens": 0, "output_tokens": 0}
             row = {"type": "cell", **cell.model_dump(), "status": status,
-                   "trace": str(trace.relative_to(out)), "usage": usage}
+                   "trace": str(trace.relative_to(out)) if trace.exists() else None,
+                   "usage": usage}
             if error:
                 row["error"] = error
             async with lock:
@@ -292,6 +306,8 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
 
     try:
         await asyncio.gather(*(run_cell(c) for c in cells))
+        if breaker.tripped is not None:
+            append({"type": "halt", "reason": breaker.tripped})
     finally:
         fh.close()
     return manifest

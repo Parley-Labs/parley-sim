@@ -41,7 +41,7 @@ from openenv.core.client_types import StepResult
 from openenv.core.env_client import EnvClient
 from openenv.core.env_server.http_server import create_app
 from openenv.core.env_server.interfaces import Environment
-from openenv.core.env_server.types import Action, Observation, State
+from openenv.core.env_server.types import Action, ConcurrencyConfig, Observation, State
 from pydantic import Field, model_validator
 
 from parley_sim import envs
@@ -100,7 +100,13 @@ class ParleySimState(State):
 class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, ParleySimState]):
     """One instance per OpenEnv session. `seats` labels each seat: the focal
     seat is "client" (played through step), others "policy:<name>" or
-    "model:<lineup name>"."""
+    "model:<lineup name>".
+
+    `state().trace` holds only what the focal seat may see (its own decisions
+    and the public move events) until the episode ends; the full trace, with
+    the scenario, ground truth and counterpart decisions, is released once it
+    is done, so a client cannot read the counterpart's private values or the
+    solution mid-episode. The refusal breaker spans the whole session."""
 
     SUPPORTS_CONCURRENT_SESSIONS = True
 
@@ -119,17 +125,52 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
         self.lineup = {m.name: m for m in (ModelSpec(**m) if isinstance(m, dict) else m
                                            for m in lineup or [])}
         self.client_factory = client_factory
+        if reward_metric not in self.entry.metric_kinds:
+            raise ValueError(f"reward_metric {reward_metric!r} is not one of "
+                             f"{sorted(self.entry.metric_kinds)}")
         self.reward_metric = reward_metric
         self.max_refusals = max_refusals
+        self._breaker = Breaker(max_refusals)
+        self._clients: dict[str, ProviderClient] = {}
+        for seat, label in self.seats.items():  # fail at startup, not at the first reset
+            if seat == self.focal:
+                continue
+            kind, _, name = label.partition(":")
+            if kind == "policy":
+                self.entry.make_policy(name, seat)
+            elif kind == "model":
+                if name not in self.lineup:
+                    raise ValueError(f"seat {seat!r}: {name!r} is not in the lineup")
+                model = self.lineup[name]
+                if model.provider == "scripted":
+                    self.entry.make_policy(model.model, seat)
+                else:
+                    self._clients[name] = client_factory(model)
+            else:
+                raise ValueError(f"seat {seat!r}: label {label!r} must start with "
+                                 "'policy:' or 'model:'")
+        self._loop: asyncio.AbstractEventLoop | None = None
         self.text = self.entry.text()
         self._episode: Episode | None = None
         self._pending: DecisionRequest | None = None
         self._counterparts: dict[Seat, ModelSeat | ScriptedSeat] = {}
         self._state = ParleySimState()
 
+    def _run(self, coro: Any) -> Any:
+        """Run a coroutine for the synchronous API on one persistent loop, so
+        provider clients are never reused across closed event loops."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            if self._loop is None or self._loop.is_closed():
+                self._loop = asyncio.new_event_loop()
+            return self._loop.run_until_complete(coro)
+        coro.close()
+        raise RuntimeError("an event loop is running here: use reset_async/step_async")
+
     def reset(self, seed: int | None = None, episode_id: str | None = None,
               arm: str | None = None, **kwargs: Any) -> ParleySimObservation:
-        return _run(self.reset_async(seed=seed, episode_id=episode_id, arm=arm))
+        return self._run(self.reset_async(seed=seed, episode_id=episode_id, arm=arm))
 
     async def reset_async(self, seed: int | None = None, episode_id: str | None = None,
                           arm: str | None = None, **kwargs: Any) -> ParleySimObservation:
@@ -139,7 +180,6 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
         policies = {s: self.entry.make_policy(label.split(":", 1)[1], s)
                     for s, label in self.seats.items() if label.startswith("policy:")}
         self._episode = Episode(self.entry.env(), spec, policies)
-        breaker = Breaker(self.max_refusals)
         self._counterparts = {}
         for s, label in self.seats.items():
             if s == self.focal or not label.startswith("model:"):
@@ -149,8 +189,8 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
                 self._counterparts[s] = ScriptedSeat(model, self.text,
                                                      self.entry.make_policy(model.model, s))
             else:
-                self._counterparts[s] = ModelSeat(model, self.text, self.client_factory(model),
-                                                  breaker)
+                self._counterparts[s] = ModelSeat(model, self.text, self._clients[model.name],
+                                                  self._breaker)
         self._state = ParleySimState(episode_id=episode_id or str(uuid4()), step_count=0,
                                      seed=seed, arm=arm, focal_seat=self.focal,
                                      seats=self.seats)
@@ -158,7 +198,7 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
 
     def step(self, action: ParleySimAction, timeout_s: float | None = None,
              **kwargs: Any) -> ParleySimObservation:
-        return _run(self.step_async(action, timeout_s=timeout_s))
+        return self._run(self.step_async(action, timeout_s=timeout_s))
 
     async def step_async(self, action: ParleySimAction, timeout_s: float | None = None,
                          **kwargs: Any) -> ParleySimObservation:
@@ -185,7 +225,11 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
     @property
     def state(self) -> ParleySimState:
         if self._episode is not None:
-            self._state.trace = list(self._episode.lines)
+            lines = self._episode.lines
+            if self._episode.result is None:  # mid-episode: only what the focal seat can see
+                lines = [l for l in lines if l["type"] == "event"
+                         or (l["type"] == "decision" and l["seat"] == self.focal)]
+            self._state.trace = list(lines)
         return self._state
 
     async def _advance(self, event: DecisionRequest | EpisodeComplete,
@@ -215,20 +259,17 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
                                     observation=event.observation, last_strike=strike)
 
 
-def _run(coro: Any) -> Any:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-    coro.close()
-    raise RuntimeError("an event loop is running here: use reset_async/step_async")
-
-
-def create_parley_app(*, max_concurrent_envs: int = 8, **environment_kwargs: Any):
-    """An OpenEnv FastAPI app serving ParleySimEnvironment(**environment_kwargs)."""
+def create_parley_app(*, max_concurrent_envs: int = 8, session_timeout_s: float | None = 600.0,
+                      **environment_kwargs: Any):
+    """An OpenEnv FastAPI app serving ParleySimEnvironment(**environment_kwargs).
+    Idle sessions are closed after `session_timeout_s`, so abandoned sessions
+    cannot hold every slot. The server has no authentication of its own."""
+    ParleySimEnvironment(**environment_kwargs)  # validate the configuration at startup
     return create_app(lambda: ParleySimEnvironment(**environment_kwargs), ParleySimAction,
                       ParleySimObservation, env_name="parley_sim",
-                      max_concurrent_envs=max_concurrent_envs, state_cls=ParleySimState)
+                      concurrency_config=ConcurrencyConfig(max_concurrent_envs=max_concurrent_envs,
+                                                           session_timeout=session_timeout_s),
+                      state_cls=ParleySimState)
 
 
 class ParleySimEnv(EnvClient[ParleySimAction, ParleySimObservation, ParleySimState]):

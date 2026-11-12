@@ -11,6 +11,9 @@ Configured from the process environment, so one image serves any arm:
     PARLEY_REWARD_METRIC  reward metric (default "focal_surplus_share")
     PARLEY_MAX_REFUSALS   stop a session after this many provider refusals (default 3)
     MAX_CONCURRENT_ENVS   concurrent sessions (default 8)
+    PARLEY_SESSION_TIMEOUT  close sessions idle this many seconds (default 600)
+
+The server has no authentication. Expose it only on a trusted network.
 
 Provider keys for model counterparts (OPENROUTER_API_KEY, ANTHROPIC_API_KEY,
 OPENAI_API_KEY) are read from the environment at runtime; never bake them in.
@@ -46,6 +49,7 @@ def build_app():
         reward_metric=os.getenv("PARLEY_REWARD_METRIC", "focal_surplus_share"),
         max_refusals=int(os.getenv("PARLEY_MAX_REFUSALS", "3")),
         max_concurrent_envs=int(os.getenv("MAX_CONCURRENT_ENVS", "8")),
+        session_timeout_s=float(os.getenv("PARLEY_SESSION_TIMEOUT", "600")),
     )
 
 
@@ -59,7 +63,9 @@ def main() -> None:
     import uvicorn
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--host", default="0.0.0.0")
+    # Local by default: the server has no authentication, and with model
+    # counterparts anyone who reaches it spends your provider keys.
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
     uvicorn.run(app, host=args.host, port=args.port)

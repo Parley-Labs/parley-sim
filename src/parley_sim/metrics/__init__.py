@@ -3,17 +3,20 @@
 Arms are compared within (seed, focal model): the same scenario and focal
 seat, only the counterpart differs. Runs in different directories are joined
 on (seed, focal, arm, replicate) after checking that every seed's scenario is
-identical. Each comparison's delta sits next to its noise floor: the same
-delta between two identically configured replicates of a model arm. A shift
-is only worth reading when it clears both its bootstrap interval and that
-floor.
+identical and that an arm found in several runs is defined the same way in
+each. Each comparison's delta sits next to its noise floor: the mean absolute
+difference between two identically configured replicates of one episode. The
+floor is a per-episode scale, so it does not shrink with more seeds: it is a
+conservative "is this larger than one replay's wobble" bar on top of the
+bootstrap interval, not a standard error.
 
 With equivalence margins, a comparison also gets a verdict: "equivalent" when
 the 90% interval of the delta lies inside +/- margin (two one-sided tests at
 5%), "different" when it clears its interval and floor, else "inconclusive".
 Diversity compares arms on spread rather than means: the across-seed SD of
-outcome metrics and the distinct-bigram ratio of the counterpart's opening
-messages, each with a paired bootstrap interval over seeds.
+outcome metrics (paired bootstrap interval over seeds) and the
+distinct-bigram ratio of the counterpart's opening messages (paired
+permutation test).
 """
 from __future__ import annotations
 
@@ -104,6 +107,17 @@ def _arm_order(runs: list[dict[str, Any]], present: set[str]) -> list[str]:
     return [a for a in order if a in present]
 
 
+def _arm_definition(config: dict[str, Any], arm: str) -> Any:
+    """What fills the counterpart seats in `arm`: policy names for soc, the
+    lineup specs of its members for model arms."""
+    if arm == "soc":
+        return sorted(config["scripted_counterparts"])
+    members = (config.get("extra_arms") or {}).get(arm) if arm != "aoc" \
+        else config["adaptive_counterparts"]
+    lineup = {m["name"]: m for m in config["lineup"]}
+    return sorted(digest(lineup[n]) for n in members or [])
+
+
 def build_report(*out_dirs: str | Path,
                  margins: dict[str, float] | None = None) -> dict[str, Any]:
     margins = margins or {}
@@ -114,10 +128,16 @@ def build_report(*out_dirs: str | Path,
     openings: dict[tuple[str, str], dict[int, str]] = defaultdict(dict)
     status_counts: dict[str, int] = defaultdict(int)
     spend = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+    arm_defs: dict[str, tuple[Any, str]] = {}
     for out_dir in out_dirs:
         out = Path(out_dir)
         run, rows = load_manifest(out)
         runs.append(run)
+        for arm in {c["arm"] for c in rows if c["status"] == "done"}:
+            definition = _arm_definition(run["config"], arm)
+            prior = arm_defs.setdefault(arm, (definition, str(out)))
+            if prior[0] != definition:
+                raise ValueError(f"arm {arm!r} is defined differently in {prior[1]} and {out}")
         if env_name not in (None, run["config"]["env"]):
             raise ValueError("runs use different environments")
         env_name = run["config"]["env"]
@@ -153,6 +173,8 @@ def build_report(*out_dirs: str | Path,
         c = cells.get((seed, focal, arm, r))
         return None if c is None else c["metrics"][name]
 
+    episodes = {focal: {arm: sum(1 for s in seeds if (s, focal, arm, 0) in cells) for arm in arms}
+                for focal in focals}
     means: dict[str, dict[str, dict[str, float | None]]] = {}
     floors: dict[str, dict[str, dict[str, float | None]]] = {}
     comparisons: dict[str, dict[str, dict[str, Any]]] = {}
@@ -237,7 +259,7 @@ def build_report(*out_dirs: str | Path,
             b["accepted"] += row["accepted"]
     return {"run_ids": [r["run_id"] for r in runs], "env": env_name,
             "cells": dict(status_counts), "spend": spend, "arms": arms,
-            "kinds": dict(entry.metric_kinds), "means": means, "noise_floors": floors,
+            "kinds": dict(entry.metric_kinds), "episodes": episodes, "means": means, "noise_floors": floors,
             "comparisons": comparisons, "diversity": diversity, "margins": margins,
             "acceptance_by_offer_quality": acceptance}
 
@@ -255,7 +277,10 @@ def render(report: dict[str, Any]) -> str:
            "Spend: {input_tokens:,} input + {output_tokens:,} output tokens, "
            "${cost_usd:.2f} reported by provider".format(**report["spend"]), ""]
     for focal, by_arm in report["means"].items():
-        out += [f"## {focal}", "", "Means (replicate 0):", "",
+        n_ep = report.get("episodes", {}).get(focal, {})
+        out += [f"## {focal}", "", "Means (replicate 0; episodes per arm: "
+                + ", ".join(f"{a}={n_ep.get(a, '?')}" for a in arms)
+                + "; comparisons use only seeds present in both arms):", "",
                 "| metric | kind | " + " | ".join(arms) + " |",
                 "|---|---|" + "---|" * len(arms)]
         for name, kind in report["kinds"].items():
@@ -288,7 +313,8 @@ def render(report: dict[str, Any]) -> str:
                     for k, v in comp.items() if v["n"]))
         table = report["acceptance_by_offer_quality"].get(focal, {})
         if any(table.values()):
-            out += ["", "Acceptance by offer quality (every faced offer, declines included):", "",
+            out += ["", ("Acceptance by offer quality (offers the focal seat could legally "
+                     "accept; declines included):"), "",
                     "| arm | bin | offers | accepted | rate |", "|---|---|---|---|---|"]
             for arm in arms:
                 for b, v in sorted(table.get(arm, {}).items()):
@@ -362,10 +388,39 @@ def export_claims(out_dir: str | Path, prefix: str | Path, sample: int = 200,
     return blind, key, len(take)
 
 
+def _weighted_bluff_agreement(pairs: list[tuple[str, str]],
+                              totals: dict[str, int]) -> dict[str, float | None]:
+    """Bluff (understated vs other) agreement reweighted from the stratified
+    sample back to the pool it was drawn from: each sampled sentence counts
+    for `total of its rule label / sampled with that label` sentences."""
+    sampled = defaultdict(int)
+    for auto_label, _ in pairs:
+        sampled[auto_label] += 1
+    cell: dict[tuple[bool, bool], float] = defaultdict(float)
+    for auto_label, human in pairs:
+        w = totals.get(auto_label, sampled[auto_label]) / sampled[auto_label]
+        cell[(auto_label == "understated", human == "understated")] += w
+    n = sum(cell.values())
+    if not n:
+        return {"kappa_understated": None, "precision_understated": None,
+                "recall_understated": None}
+    po = (cell[(True, True)] + cell[(False, False)]) / n
+    pa = (cell[(True, True)] + cell[(True, False)]) / n
+    ph = (cell[(True, True)] + cell[(False, True)]) / n
+    pe = pa * ph + (1 - pa) * (1 - ph)
+    flagged, actual = cell[(True, True)] + cell[(True, False)], cell[(True, True)] + cell[(False, True)]
+    return {"kappa_understated": (po - pe) / (1 - pe) if pe < 1 else None,
+            "precision_understated": cell[(True, True)] / flagged if flagged else None,
+            "recall_understated": cell[(True, True)] / actual if actual else None}
+
+
 def claims_kappa(blind_csv: str | Path, key_csv: str | Path) -> dict[str, Any]:
     import csv
     with Path(key_csv).open() as f:
-        auto = {r["id"]: r["auto_label"] for r in csv.DictReader(f)}
+        key_rows = list(csv.DictReader(f))
+    auto = {r["id"]: r["auto_label"] for r in key_rows}
+    totals = {r["auto_label"]: int(r["label_total_in_run"]) for r in key_rows
+              if r.get("label_total_in_run")}
     pairs, invalid = [], []
     with Path(blind_csv).open() as f:
         for r in csv.DictReader(f):
@@ -379,7 +434,8 @@ def claims_kappa(blind_csv: str | Path, key_csv: str | Path) -> dict[str, Any]:
     a, h = [p[0] for p in pairs], [p[1] for p in pairs]
     confusion = {x: {y: sum(1 for p in pairs if p == (x, y)) for y in CLAIM_LABELS}
                  for x in CLAIM_LABELS}
-    return {"n": len(pairs), "invalid": invalid,
+    weighted = _weighted_bluff_agreement(pairs, totals) if totals else None
+    return {"n": len(pairs), "invalid": invalid, "weighted_to_pool": weighted,
             "kappa_understated": cohen_kappa(["understated" if x == "understated" else "other"
                                               for x in a],
                                              ["understated" if x == "understated" else "other"

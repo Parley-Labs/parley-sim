@@ -50,12 +50,23 @@ The server reads its configuration from environment variables:
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `PARLEY_ENV` | `support_desk` | Environment name or import path |
 | `PARLEY_SEATS` | `{"agent": "client", "customer": "policy:reasonable"}` | Who plays each seat. `client` is your model. |
 | `PARLEY_LINEUP` | `[]` | Model specs for `model:<name>` seats. |
 | `PARLEY_ENV_CONFIG` | `{}` | Environment options, e.g. `{"max_turns": 10}`. |
 | `PARLEY_REWARD_METRIC` | `focal_surplus_share` | Which episode metric is the reward. |
 | `PARLEY_MAX_REFUSALS` | `3` | Stop a session after this many provider refusals. |
 | `MAX_CONCURRENT_ENVS` | `8` | Concurrent sessions. |
+| `PARLEY_SESSION_TIMEOUT` | `600` | Close sessions idle this many seconds. |
+
+The server has no authentication, and with model counterparts every session
+spends your provider keys. `uv run --project . server` binds to localhost; the
+Docker image listens on all interfaces inside the container, so publish its
+port only on a trusted network.
+
+During an episode, `env.state()` shows only what your model's seat can see.
+The full trace, with the scenario, ground truth and the counterpart's
+decisions, is available once the episode is done.
 
 Scripted customers: `policy:hardliner`, `policy:reasonable`, `policy:conceder`.
 An LLM customer needs a lineup entry and its provider key at runtime:

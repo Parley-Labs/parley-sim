@@ -89,13 +89,22 @@ class Haggle:
         return {"standing_offer": self._standing(state, seat)}
 
     def apply(self, state: State, seat: Seat, action: JSON) -> tuple[State, list[JSON]]:
-        move = action.get("move", {})
+        # Validate everything a model could get wrong as IllegalAction, so the
+        # runtime records a strike and applies the fallback instead of crashing.
+        if seat != self.to_act(state):
+            raise IllegalAction(f"it is not {seat}'s turn")
+        if not isinstance(action, dict) or not isinstance(action.get("move"), dict):
+            raise IllegalAction("an action is an object with a move object")
+        move = action["move"]
         kind = move.get("type")
-        said = (*state.transcript, (seat, action.get("message", "")))
+        message = action.get("message", "")
+        if not isinstance(message, str):
+            raise IllegalAction("message must be a string")
+        said = (*state.transcript, (seat, message))
         nxt = replace(state, turn=state.turn + 1, transcript=said)
         if kind == "offer":
             price = move.get("price")
-            if not isinstance(price, int) or not 0 <= price <= 100:
+            if isinstance(price, bool) or not isinstance(price, int) or not 0 <= price <= 100:
                 raise IllegalAction("price must be an integer from 0 to 100")
             nxt = replace(nxt, offers=(*state.offers, (seat, price)))
         elif kind == "accept":
@@ -109,8 +118,7 @@ class Haggle:
             raise IllegalAction(f"unknown move {kind!r}")
         if nxt.end_reason is None and nxt.turn >= state.inst.max_turns:
             nxt = replace(nxt, end_reason="deadline")
-        return nxt, [{"event_type": "move", "seat": seat, "move": move,
-                      "message": action.get("message", "")}]
+        return nxt, [{"event_type": "move", "seat": seat, "move": move, "message": message}]
 
     def fallback_action(self, state: State, seat: Seat) -> JSON:
         """Applied when a model's move is invalid: repeat its last offer, or
@@ -141,7 +149,7 @@ class Concede:
         limit = obs["private"].get("cost", obs["private"].get("value"))
         start = 100 if self.seat == SELLER else 0
         done, left = len(obs["transcript"]), obs["turns_left"]
-        progress = done / max(done + left - 1, 1)  # 0 on the first turn, 1 on the last
+        progress = done / max(done + left - 1, 1)  # 0 on the first turn, 1 on the game's last
         target = round(start + (limit - start) * progress * (1 - self.params["keep"]))
         theirs = obs["their_offer"]
         good = theirs is not None and (theirs >= target if self.seat == SELLER else theirs <= target)
@@ -151,7 +159,7 @@ class Concede:
 
 
 def make_policy(name: str, seat: Seat) -> Concede:
-    keep = {"firm": 0.5, "flexible": 0.1}.get(name)
+    keep = {"firm": 0.3, "flexible": 0.1}.get(name)
     if keep is None:
         raise ValueError(f"unknown policy {name!r} (known: firm, flexible)")
     return Concede(name, seat, keep)
@@ -180,7 +188,7 @@ class HaggleText:
                       "never pay more than that. Pay as little as you can.")
         lines = [f"[{t['seat']}] {t['message']}" for t in obs["transcript"]]
         user = "\n".join([*lines, f"Their standing offer: {obs['their_offer']}",
-                          f"Turns left: {obs['turns_left']}",
+                          f"Turns left for both sides together: {obs['turns_left']}",
                           "Reply with JSON matching: " + json.dumps(SCHEMA)])
         return system, user
 

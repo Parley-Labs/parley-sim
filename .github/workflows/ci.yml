@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -17,7 +20,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: uv sync --extra openai --extra anthropic --extra openenv
+      - run: uv sync --locked --extra openai --extra anthropic --extra openenv
       - run: uv run ruff check .
       - run: uv run lint-imports
       - run: uv run pytest -q
@@ -32,7 +35,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.13"
-      - run: uv sync --extra gym --extra openai
+      - run: uv sync --locked --extra gym --extra openai
       - run: uv run pytest -q tests/test_nemo_gym_adapter.py
 
   build:

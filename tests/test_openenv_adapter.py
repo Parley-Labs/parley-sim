@@ -110,3 +110,25 @@ def test_served_app_runs_an_episode_over_websocket():
         state = ws.receive_json()["data"]
     assert data["reward"] == episode_metrics(state["trace"])["focal_surplus_share"]
     assert verify(SupportDesk(), state["trace"]) == []
+
+
+def test_state_hides_private_information_until_the_episode_ends():
+    env = ParleySimEnvironment(seats=SCRIPTED)
+    env.reset(seed=7)
+    trace = env.state.trace
+    assert all(l["type"] == "event" or l.get("seat") == "agent" for l in trace)
+    assert not any(l["type"] in ("header", "footer") for l in trace)
+    assert "walkaway" not in json.dumps(trace)
+    play(env)
+    assert env.state.trace[0]["type"] == "header"
+
+
+@pytest.mark.parametrize("kwargs,match", [
+    ({"reward_metric": "focal_surplus"}, "reward_metric"),
+    ({"seats": {"agent": "client", "customer": "polcy:reasonable"}}, "must start with"),
+    ({"seats": {"agent": "client", "customer": "model:peer"}}, "not in the lineup"),
+    ({"seats": {"agent": "client", "customer": "policy:nobody"}}, "unknown policy"),
+])
+def test_misconfiguration_fails_at_startup(kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        ParleySimEnvironment(**{"seats": SCRIPTED, **kwargs})

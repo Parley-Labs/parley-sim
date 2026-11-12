@@ -54,9 +54,10 @@ def cmd_matched(args: argparse.Namespace) -> int:
     print(render(build_report(args.out)))
     print(f"manifest: {manifest}")
     halted = [json.loads(l) for l in manifest.read_text().splitlines()
-              if '"skipped_halted"' in l or "ProviderHalted" in l]
+              if '"skipped_halted"' in l or "ProviderHalted" in l or '"type": "halt"' in l]
     if halted:
-        reason = next((r["error"] for r in halted if r.get("error")), "unknown")
+        reason = next((r.get("reason") or r.get("error") for r in halted
+                       if r.get("reason") or r.get("error")), "unknown")
         print(f"\nRUN HALTED to protect the provider account: {reason}\n"
               f"{len(halted)} cells did not run. Find the cause before re-running.")
         return 2

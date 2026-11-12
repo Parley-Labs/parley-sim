@@ -40,11 +40,11 @@ def load_personas(path: str | Path) -> list[dict[str, Any]]:
     path = Path(path).expanduser()
     if path.suffix == ".jsonl":
         rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
-        return [r.get("persona", r) for r in rows]
-    import pyarrow.parquet as pq
-    personas = []
-    for value in pq.read_table(path, columns=["persona"]).column("persona").to_pylist():
-        personas.append(json.loads(value) if isinstance(value, str) else value)
+        values = [r.get("persona", r) for r in rows]
+    else:
+        import pyarrow.parquet as pq
+        values = pq.read_table(path, columns=["persona"]).column("persona").to_pylist()
+    personas = [json.loads(v) if isinstance(v, str) else v for v in values]
     if not personas:
         raise ValueError(f"no personas in {path}")
     return personas

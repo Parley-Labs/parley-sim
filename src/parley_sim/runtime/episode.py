@@ -188,21 +188,37 @@ class Episode:
 
 def verify(env: Environment, lines: list[dict[str, Any]]) -> list[str]:
     """Re-fold a recorded trace through the pure environment. Returns a list of
-    mismatches (empty means the trace is exactly reproducible)."""
+    mismatches (empty means the trace is exactly reproducible): the scenario,
+    ground truth, every state hash, the final state and the outcomes."""
+    if not lines or lines[0].get("type") != "header":
+        return ["no header"]
     header = lines[0]
+    if lines[-1].get("type") != "footer":
+        return ["no footer: the trace is truncated"]
+    footer = lines[-1]
     spec = header["spec"]
-    instance = env.generate(spec["seed"], spec["config"])
     problems: list[str] = []
+    if header.get("env", {}).get("version") not in (None, env.version):
+        problems.append(f"env version {header['env']['version']} != {env.version}")
+    instance = env.generate(spec["seed"], spec["config"])
     if env.instance_to_json(instance) != header["instance"]:
         problems.append("instance differs from header")
+    if env.ground_truth(instance) != header["ground_truth"]:
+        problems.append("ground truth differs from header")
     state = env.initial_state(instance)
     last_hash = digest(env.state_to_json(state))
     for line in lines[1:]:
         if line["type"] == "decision":
-            state, _ = env.apply(state, line["seat"], line["applied"])
+            try:
+                state, _ = env.apply(state, line["seat"], line["applied"])
+            except IllegalAction as exc:
+                problems.append(f"seq {line['seq']}: recorded move is illegal: {exc}")
+                return problems
             last_hash = digest(env.state_to_json(state))
         elif line["type"] == "event" and line["state_hash"] != last_hash:
             problems.append(f"seq {line['seq']}: state hash mismatch")
         elif line["type"] == "footer" and line["final_state_hash"] != last_hash:
             problems.append("final state hash mismatch")
+    if footer.get("status") == "complete" and footer.get("outcomes") != env.outcome(state):
+        problems.append("outcomes differ from the replayed final state")
     return problems

@@ -140,8 +140,11 @@ def claim_rows(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def decision_rows(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Every focal decision taken while facing a standing offer: the offer's
-    quality to the focal seat and whether it was accepted. Declines included."""
+    """Every focal decision taken while facing a standing offer it was allowed
+    to accept: the offer's quality to the focal seat and whether it was
+    accepted. Declines included. Offers outside the focal seat's authority are
+    left out, because accepting them is illegal: counting them as declines
+    would bias any arm whose counterpart makes such offers often."""
     header = lines[0]
     focal = _focal(header)
     best = _max_surplus(header, focal)
@@ -151,6 +154,8 @@ def decision_rows(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         ctx = l["context"]
         if ctx.get("standing_offer") is None or not best:
+            continue
+        if ctx.get("standing_offer_authorized") is False:
             continue
         quality = (ctx["standing_offer_value"] - ctx["walkaway_value"]) / best
         rows.append({

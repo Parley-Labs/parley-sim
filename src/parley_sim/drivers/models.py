@@ -73,8 +73,11 @@ class AnthropicClient:
     def __init__(self, spec: ModelSpec):
         import anthropic
         self.spec = spec
-        self._client = anthropic.AsyncAnthropic(
-            api_key=os.environ.get(spec.api_key_env or "ANTHROPIC_API_KEY"))
+        env = spec.api_key_env or "ANTHROPIC_API_KEY"
+        if spec.api_key_env and not os.environ.get(env):
+            raise RuntimeError(f"{env} is not set")  # never fall back to ANTHROPIC_API_KEY
+        self._client = anthropic.AsyncAnthropic(api_key=os.environ.get(env),
+                                                base_url=spec.base_url)
 
     async def complete(self, *, system: str, user: str, schema: JSON) -> tuple[Any, JSON]:
         output_config: dict[str, Any] = {"format": {"type": "json_schema", "schema": schema}}
@@ -109,6 +112,14 @@ class OpenAIClient:
     def __init__(self, spec: ModelSpec):
         from openai import AsyncOpenAI
         self.spec = spec
+        # A key must only ever reach the host it belongs to: an OpenAI key goes
+        # to a custom base_url only when named explicitly, and a gateway key
+        # never goes to OpenAI's default endpoint.
+        if spec.provider == "openai" and spec.base_url and not spec.api_key_env:
+            raise ValueError(f"{spec.name}: provider 'openai' with a custom base_url needs "
+                             "api_key_env, so OPENAI_API_KEY is never sent to another host")
+        if spec.provider == "openai_compat" and not spec.base_url:
+            raise ValueError(f"{spec.name}: provider 'openai_compat' needs base_url")
         env = spec.api_key_env or ("OPENAI_API_KEY" if spec.provider == "openai"
                                    else "OPENROUTER_API_KEY")
         key = os.environ.get(env)
@@ -144,6 +155,8 @@ class OpenAIClient:
         if resp.choices[0].finish_reason == "content_filter":
             raise ProviderRefusal("content_filter")
         msg = resp.choices[0].message
+        if getattr(msg, "refusal", None):  # structured-output refusals arrive with finish "stop"
+            raise ProviderRefusal(f"refusal: {msg.refusal[:200]}")
         usage = resp.usage
         cost = getattr(usage, "cost", None)  # OpenRouter, when usage accounting is on
         return msg.content, {

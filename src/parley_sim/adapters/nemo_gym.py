@@ -123,6 +123,11 @@ class ParleySimEnvironmentServerConfig(BaseEnvironmentServerConfig):
     reward_metric: str = "focal_surplus_share"
     actor_call_timeout_seconds: float = Field(300.0, gt=0)
     max_refusals: int = Field(3, ge=1)
+    # Environments task rows may name by import path ("pkg.module:ENTRY").
+    # Names of built-in, registered or entry-point environments are always
+    # allowed; an import path in a task row is refused unless listed here,
+    # because loading one imports and runs code named by the task data.
+    allowed_env_paths: list[str] = Field(default_factory=list)
     # Merged into every Responses API request (e.g. {"reasoning": {"effort": "low"}}).
     responses_create_params: dict[str, Any] = Field(default_factory=dict)
 
@@ -229,7 +234,12 @@ class ParleySimEnvironmentServer(
                   cleanup: CleanupContext) -> ParleySimEpisodeResponse:
         task = request.task.task_input
         try:
+            if ":" in task.env and task.env not in self.config.allowed_env_paths:
+                raise ValueError(f"env {task.env!r} is an import path not in allowed_env_paths")
             entry = envs.get(task.env)
+            if self.config.reward_metric not in entry.metric_kinds:
+                raise ValueError(f"reward_metric {self.config.reward_metric!r} is not one of "
+                                 f"{sorted(entry.metric_kinds)}")
             focal = task.focal_seat or entry.focal_seat
             spec = EpisodeSpec(seed=task.seed, seats=task.seats, config=task.env_config,
                                focal_seat=focal, arm=task.arm, pair_key=task.pair_key,
@@ -266,6 +276,9 @@ class ParleySimEnvironmentServer(
         for seat, label in spec.seats.items():
             if label.startswith("policy:"):
                 continue
+            if not label.startswith("model:"):
+                raise ValueError(f"seat {seat!r}: label {label!r} must start with "
+                                 "'policy:' or 'model:'")
             name = label.split(":", 1)[1]
             if seat == focal:
                 target = self.config.focal_agent

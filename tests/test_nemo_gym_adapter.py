@@ -184,3 +184,20 @@ def test_aggregate_metrics_and_routes():
     assert agg.key_metrics["mean_reward"] == 0.25 and agg.key_metrics["mean_deal"] == 0.5
     routes = {r.path for r in server.setup_webserver().routes}
     assert {"/run", "/aggregate_metrics"} <= routes
+
+
+@pytest.mark.parametrize("env,seats,cfg,reason", [
+    ("os:getcwd", {"agent": "model:focal", "customer": "policy:conceder"}, {}, "allowed_env_paths"),
+    ("support_desk", {"agent": "model:focal", "customer": "policy:conceder"},
+     {"reward_metric": "focal_surplus"}, "reward_metric"),
+    ("support_desk", {"agent": "model:focal", "customer": "peer"}, {}, "must start with"),
+])
+def test_unsafe_or_invalid_tasks_fail_at_seed(env, seats, cfg, reason):
+    server, client = _server({"focal": accept_if_offered}, **cfg)
+    req = ParleySimEpisodeRequest(
+        episode_id=EpisodeId(rollout_id="rollout"),
+        task=MaterializedTask(task_id=TaskId(taskset="parley:support_desk", task_id="s3"),
+                              task_input=ParleySimTaskInput(seed=3, seats=seats, env=env)))
+    res = asyncio.run(server.run_request(req))
+    assert res.failure is not None and res.failure.stage == "seed"
+    assert reason in res.failure.failure_reason and client.calls == []

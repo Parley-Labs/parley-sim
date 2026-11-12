@@ -55,13 +55,17 @@ def test_anthropic_refusal_becomes_a_refusal_strike(monkeypatch):
     assert res.strike == "refusal" and res.detail == "cyber"
 
 
+GATEWAY = "https://gateway.invalid/v1"
+
+
 @pytest.mark.parametrize("provider,tokens_key", [("openai", "max_completion_tokens"),
                                                  ("openai_compat", "max_tokens")])
 def test_openai_paths(monkeypatch, provider, tokens_key):
     monkeypatch.setenv("OPENAI_API_KEY", "x")
     monkeypatch.setenv("OPENROUTER_API_KEY", "x")
     client = OpenAIClient(ModelSpec(name="o", provider=provider, model="m", temperature=0.2,
-                                    base_url="https://example.invalid/v1"))
+                                    base_url="https://example.invalid/v1",
+                                    api_key_env="OPENAI_API_KEY" if provider == "openai" else None))
     msg = NS(content='{"move": {"type": "none"}}', reasoning="why")
     resp = NS(model="m", choices=[NS(message=msg, finish_reason="stop")],
               usage=NS(prompt_tokens=11, completion_tokens=4))
@@ -97,13 +101,34 @@ def test_missing_gateway_key_never_falls_back_to_openai_key(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "secret")
     with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
+        OpenAIClient(ModelSpec(name="o", provider="openai_compat", model="m", base_url=GATEWAY))
+
+
+def test_keys_only_reach_their_own_host(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "secret")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "placeholder")
+    with pytest.raises(ValueError, match="api_key_env"):
+        OpenAIClient(ModelSpec(name="o", provider="openai", model="m", base_url=GATEWAY))
+    with pytest.raises(ValueError, match="needs base_url"):
         OpenAIClient(ModelSpec(name="o", provider="openai_compat", model="m"))
+
+
+def test_openai_structured_output_refusal_is_a_refusal(monkeypatch):
+    from parley_sim.drivers.models import ProviderRefusal
+    monkeypatch.setenv("OPENROUTER_API_KEY", "placeholder")
+    client = OpenAIClient(ModelSpec(name="o", provider="openai_compat", model="m", base_url=GATEWAY))
+    msg = NS(content=None, refusal="I can't help with that.")
+    resp = NS(model="m", choices=[NS(message=msg, finish_reason="stop")],
+              usage=NS(prompt_tokens=1, completion_tokens=0))
+    client._client = NS(chat=NS(completions=Recorder(resp)))
+    with pytest.raises(ProviderRefusal):
+        asyncio.run(client.complete(system="s", user="u", schema={}))
 
 
 def test_openai_content_filter_is_a_refusal(monkeypatch):
     from parley_sim.drivers.models import ProviderRefusal
     monkeypatch.setenv("OPENROUTER_API_KEY", "placeholder")
-    client = OpenAIClient(ModelSpec(name="o", provider="openai_compat", model="m"))
+    client = OpenAIClient(ModelSpec(name="o", provider="openai_compat", model="m", base_url=GATEWAY))
     resp = NS(model="m", choices=[NS(message=NS(content=None), finish_reason="content_filter")],
               usage=NS(prompt_tokens=1, completion_tokens=0))
     client._client = NS(chat=NS(completions=Recorder(resp)))
