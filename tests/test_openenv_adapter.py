@@ -409,3 +409,15 @@ def test_a_failed_counterpart_turn_names_its_provider_only_when_traces_are_relea
         env.reset(seed=1)
     assert ("secret-org/peer-model" in str(info.value)) is leaks
     assert env.state.done
+
+
+def test_schema_projection_keeps_keys_the_schema_allows():
+    from parley_sim.adapters.openenv import _project
+    closed = {"type": "object", "properties": {"a": {}}, "additionalProperties": False}
+    open_ = {"type": "object", "properties": {"a": {}}}
+    typed = {"type": "object", "properties": {"a": {}},
+             "additionalProperties": {"type": "object", "properties": {"x": {}},
+                                      "additionalProperties": False}}
+    assert _project({"a": 1, "b": 2}, closed) == {"a": 1}
+    assert _project({"a": 1, "b": 2}, open_) == {"a": 1, "b": 2}
+    assert _project({"a": 1, "b": {"x": 1, "y": 2}}, typed) == {"a": 1, "b": {"x": 1}}

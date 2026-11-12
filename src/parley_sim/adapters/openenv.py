@@ -134,12 +134,15 @@ class ParleySimAction(Action):
 
 
 def _project(value: Any, schema: Any) -> Any:
-    """`value` with only the object keys `schema` declares, recursively."""
+    """`value` with only the object keys `schema` allows, recursively: declared
+    properties, plus undeclared ones when `additionalProperties` permits them."""
     if not isinstance(schema, dict):
         return value
     props = schema.get("properties")
     if isinstance(value, dict) and isinstance(props, dict):
-        return {k: _project(v, props[k]) for k, v in value.items() if k in props}
+        extra = schema.get("additionalProperties", True)
+        return {k: _project(v, props[k] if k in props else extra)
+                for k, v in value.items() if k in props or extra is not False}
     items = schema.get("items")
     if isinstance(value, list) and isinstance(items, dict):
         return [_project(v, items) for v in value]

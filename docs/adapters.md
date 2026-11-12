@@ -146,8 +146,8 @@ training sample, also requires the agent's model server to tokenize the
 resent output items into the same token ids it sampled. The adapter does not
 check that; each output item's `prompt_token_ids` let a trainer verify it.
 
-A refused call, or an empty or whitespace-only reply, never enters the
-conversation. A refusal is a strike. An empty reply is retried once with a
+A refused call (any refusal part, even beside text), or an empty or
+whitespace-only reply, never enters the conversation. A refusal is a strike. An empty reply is retried once with a
 correction appended to the same prompt, as in a local run. Both are still
 listed in `focal_calls`.
 
@@ -161,6 +161,10 @@ The episode result carries:
   call. Gym's rollout collector stores it as the rollout's `response`, so
   `rollout_carries_token_ids` sees the agent's sampled tokens and token
   capture leaves them as they are.
+- `mask_sample`: Gym's flag for a sample the trainer must skip. It is set
+  when some focal output items carry generated token ids and others don't:
+  Gym keeps inline ids as they are and fills in none, so the sample would
+  otherwise train on only part of the agent's tokens.
 - `focal_calls`: every focal request and full response, for audit, each
   flagged `refused`, `empty` and `in_conversation`. Gym's own `_ng_*` keys,
   such as `_ng_trajectory` with observability on, are dropped from both.
@@ -232,7 +236,12 @@ sessions close after `PARLEY_SESSION_TIMEOUT` seconds (default 600), so
 abandoned sessions can't hold every slot. The server refuses to start if that
 is shorter than twice the largest `timeout_s` of a seated lineup model, since
 the idle check could otherwise close a session in the middle of a step; leave
-room for your own model's time per turn as well.
+room for your own model's time per turn as well. OpenEnv 0.12 counts idle
+time from the end of the last `reset` or `step`, not its start, so a step sent
+just before the deadline can still be closed while a counterpart is
+answering: keep the timeout well above the longest pause between your
+client's steps plus one counterpart decision. Only `reset` and `step` count
+as activity; a client that only polls `state()` is closed as idle.
 
 A ready-to-build package is in
 [`integrations/openenv/parley_sim_env`](../integrations/openenv/parley_sim_env/README.md),

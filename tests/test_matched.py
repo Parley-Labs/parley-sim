@@ -565,3 +565,9 @@ def test_resume_counts_tokens_of_cells_cut_off_mid_episode(tmp_path):
     asyncio.run(run_matched(config, tmp_path, client_factory=lambda spec: SpendsTokens()))
     run, _ = load_manifest(tmp_path)
     assert run["prior_usage"]["input_tokens"] == 700 and run["prior_usage"]["output_tokens"] == 50
+
+
+def test_report_json_has_no_nan_for_a_single_pair(tmp_path):
+    asyncio.run(run_matched(cfg(seeds="0:1"), tmp_path))
+    text = json.dumps(build_report(tmp_path))
+    assert "NaN" not in text and "Infinity" not in text

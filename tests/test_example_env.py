@@ -45,3 +45,18 @@ def test_readme_config_is_valid(tmp_path):
     (tmp_path / "c.yaml").write_text(block)
     cfg = load_config(tmp_path / "c.yaml")
     assert cfg.focal_models == ["agent-model"]
+
+
+def test_claims_refuse_traces_of_another_env(tmp_path, monkeypatch):
+    import asyncio
+    from pathlib import Path
+
+    import pytest
+
+    from parley_sim.matched import load_config, run_matched
+    from parley_sim.metrics import export_claims
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / "examples"))
+    config = load_config(Path(__file__).parents[1] / "examples" / "haggle.yaml")
+    asyncio.run(run_matched(config.model_copy(update={"seeds": "0:2"}), tmp_path / "run"))
+    with pytest.raises(ValueError, match="is a trace of env"):
+        export_claims(tmp_path / "run", tmp_path / "c", env="support_desk")

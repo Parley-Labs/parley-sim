@@ -113,6 +113,10 @@ class ParleySimTaskInput(BaseModel):
     replicate: int = 0
 
 
+# Output item types the agent generated (prompt echoes are messages from other roles).
+_SAMPLED_TYPES = frozenset({"message", "reasoning", "function_call"})
+
+
 class ParleySimEpisodeResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -132,6 +136,9 @@ class ParleySimEpisodeResult(BaseModel):
     # Every focal model call in full (request and response), for audit. A
     # call flagged `refused` or `empty` is not part of the conversation.
     focal_calls: list[dict[str, Any]] = Field(default_factory=list)
+    # Gym's flag for a sample the trainer must skip: set when some focal output
+    # items carry generated token ids and others don't.
+    mask_sample: bool = False
 
 
 class ParleySimEpisodeRequest(BaseEpisodeRequest[ParleySimTaskInput]):
@@ -272,6 +279,15 @@ class _AgentSessionClient:
                                   or 0 for u in usage)}}}
         return NeMoGymResponse.model_validate(envelope).model_dump(mode="json", exclude_unset=True)
 
+    def partial_token_coverage(self) -> bool:
+        """Whether some sampled output items carry generated token ids and others
+        don't. Gym keeps any inline ids as they are and fills in none, so such a
+        sample would train on part of the agent's tokens; it is masked instead."""
+        sampled = [item for _, output in self.exchanges for item in output
+                   if isinstance(item, dict) and item.get("type") in _SAMPLED_TYPES]
+        has = [bool(item.get("generation_token_ids")) for item in sampled]
+        return any(has) and not all(has)
+
     async def complete(self, *, system: str, user: str, schema: JSON,
                        history: list[JSON] | None = None) -> tuple[Any, JSON]:
         params = {
@@ -315,7 +331,8 @@ class _AgentSessionClient:
         dumped = {k: v for k, v in result.model_dump(mode="json", exclude_unset=True).items()
                   if not k.startswith("_ng_")}
         text, refusal, reasoning = _read_output(result)
-        refused = refusal is not None and not text
+        # A refusal part makes the reply a refusal even with text beside it.
+        refused = refusal is not None
         # ModelSeat never puts an empty reply into the conversation and retries it
         # on the original prompt; the session stays in step by not recording it.
         blank = not text.strip()
@@ -328,7 +345,8 @@ class _AgentSessionClient:
         }
         if history is not None:
             self.calls.append({"request": params, "response": dumped, "refused": refused,
-                               "empty": blank and not refused, "in_conversation": not blank})
+                               "empty": blank and not refused,
+                               "in_conversation": not blank and not refused})
         if refused:
             # Not part of the conversation: the seat records no exchange for it
             # either, so both sides stay in step and the next turn resumes from
@@ -387,6 +405,11 @@ class ParleySimEnvironmentServer(
             if focal not in spec.seats:  # Episode has checked spec.seats against the env's seats
                 raise ValueError(f"focal_seat {focal!r} is not one of the env's seats "
                                  f"{sorted(spec.seats)}")
+            if not spec.seats[focal].startswith("model:"):
+                # A scripted focal seat would return a rewarded rollout with no
+                # agent response to train on.
+                raise ValueError(f"focal seat {focal!r} must be played by the agent under "
+                                 f"training (model:<name>), not {spec.seats[focal]!r}")
             seats = self._model_seats(request, cleanup, entry, spec, focal)
         except (ValueError, KeyError, TypeError, AttributeError, ImportError) as error:
             # ImportError covers ModuleNotFoundError from an allowed import path.
@@ -421,7 +444,8 @@ class ParleySimEnvironmentServer(
                 outcomes=event.outcomes, metrics=metrics, n_decisions=event.n_decisions,
                 n_strikes=event.n_strikes, trace=episode.lines,
                 response=focal_client.training_response() if focal_client else None,
-                focal_calls=focal_client.calls if focal_client else []))
+                focal_calls=focal_client.calls if focal_client else [],
+                mask_sample=bool(focal_client and focal_client.partial_token_coverage())))
 
     def _model_seats(self, request: ParleySimEpisodeRequest, cleanup: CleanupContext,
                      entry: envs.EnvEntry, spec: EpisodeSpec, focal: Seat) -> dict[Seat, ModelSeat]:

@@ -347,7 +347,8 @@ def build_report(*out_dirs: str | Path, margins: dict[str, float] | None = None,
                         verdict = "inconclusive" if margin is not None else "-"
                     table[name] = {
                         "kind": kind, "n_pairs": len(deltas), "delta_mean": delta,
-                        "delta_ci": [lo, hi], "delta_ci90": [lo90, hi90],
+                        "delta_ci": [_finite(lo), _finite(hi)],
+                        "delta_ci90": [_finite(lo90), _finite(hi90)],
                         "noise_floor": floor, "margin": margin, "clears": clears,
                         "verdict": verdict,
                     }
@@ -382,7 +383,7 @@ def build_report(*out_dirs: str | Path, margins: dict[str, float] | None = None,
                 pairs = [(openings[(focal, a)][s], openings[(focal, b)][s]) for s in seeds
                          if s in openings[(focal, a)] and s in openings[(focal, b)]]
                 d, pval = _paired_permutation_p(pairs, distinct2)
-                out_c["opening_distinct2"] = {"delta": d, "p": pval, "n": len(pairs)}
+                out_c["opening_distinct2"] = {"delta": d, "p": _finite(pval), "n": len(pairs)}
                 comps[f"{b} vs {a}"] = out_c
         diversity[focal] = {"per_arm": per_arm, "comparisons": comps}
 
@@ -393,11 +394,23 @@ def build_report(*out_dirs: str | Path, margins: dict[str, float] | None = None,
             b = table.setdefault(row["bin"], {"n": 0, "accepted": 0})
             b["n"] += 1
             b["accepted"] += row["accepted"]
-    return {"run_ids": [r["run_id"] for r in runs], "env": env_name,
+    return _json_safe({"run_ids": [r["run_id"] for r in runs], "env": env_name,
             "cells": dict(status_counts), "spend": spend, "arms": arms,
             "kinds": dict(entry.metric_kinds), "episodes": episodes, "means": means, "noise_floors": floors,
             "comparisons": comparisons, "diversity": diversity, "margins": margins,
-            "acceptance_by_offer_quality": acceptance}
+            "acceptance_by_offer_quality": acceptance})
+
+
+def _json_safe(obj: Any) -> Any:
+    """`obj` with every NaN or infinity (an interval or p-value from too few
+    pairs) replaced by None, so `--json` output is strict JSON."""
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    return obj
 
 
 def _fmt(v: Any) -> str:
@@ -406,8 +419,13 @@ def _fmt(v: Any) -> str:
     return f"{v:+.3f}" if isinstance(v, float) else str(v)
 
 
-def _fmt_p(p: float) -> str:
-    if p != p:
+def _finite(x: float | None) -> float | None:
+    """None for NaN or infinity, so `--json` output stays strict JSON."""
+    return x if x is not None and math.isfinite(x) else None
+
+
+def _fmt_p(p: float | None) -> str:
+    if p is None or p != p:
         return "p=-"
     return "p<0.001" if p < 0.001 else f"p={p:.3f}"
 
@@ -501,9 +519,16 @@ def export_claims(out_dir: str | Path, prefix: str | Path, sample: int = 200,
     entry = resolve_env(run["config"]["env"], out, env)
     if entry.claim_rows is None:
         raise ValueError(f"env {run['config']['env']!r} has no claim classifier")
-    rows = [r for c in cells if c["status"] == "done"
-            for r in entry.claim_rows(read_trace(out / c["trace"]))
-            if r["id"] not in (exclude or set())]
+    own = entry.env().name
+    rows = []
+    for c in cells:
+        if c["status"] != "done":
+            continue
+        lines = read_trace(out / c["trace"])
+        if lines[0].get("env", {}).get("name") != own:  # as build_report checks
+            raise ValueError(f"{out / c['trace']} is a trace of env "
+                             f"{lines[0].get('env', {}).get('name')!r}, not {own!r}")
+        rows += [r for r in entry.claim_rows(lines) if r["id"] not in (exclude or set())]
     rng = random.Random(seed)
     by_label: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for r in rows:
