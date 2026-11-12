@@ -1,6 +1,6 @@
 # Claim-rule validation, round 1
 
-Rules: parley-sim claims.py as of commit daf0b5b ("v2"; 330d10f before the history was re-authored).
+Rules: parley-sim claims.py as of commit 71fef17 ("v2"; daf0b5b and 330d10f in earlier versions of the history).
 Sample: 150 agent sentences from equiv-sd3, stratified by the rules' label
 (all 11 rule-flagged "understated", 64 "accurate", 75 "none"); run totals
 524 accurate, 11 understated, 1541 none. One blind human labeller.

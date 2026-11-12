@@ -1,6 +1,6 @@
 # Claim-rule validation, round 2 (held-out)
 
-Rules: parley-sim claims.py at commit 8367fcf ("v3"; 06dbb6c before the history was re-authored), frozen before this
+Rules: parley-sim claims.py at commit 7bc41cf ("v3"; 8367fcf and 06dbb6c in earlier versions of the history), frozen before this
 sample was drawn or labelled. Sample: 150 agent sentences from equiv-sd3, none
 used in round 1, stratified by the rules' label (36 understated, 3
 overstated, 36 accurate, 75 none; run totals 94 / 3 / 507 / 1446). One blind
