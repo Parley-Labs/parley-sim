@@ -149,13 +149,21 @@ declines would bias any arm whose counterpart makes them often.
 
 ## Strikes and fallbacks
 
-When a model's output does not parse, proposes an illegal move, times out,
-is refused by the provider, or fails with a provider error, the episode
-records a **strike** with the reason and applies the environment's fallback
-move (a no-op in `support_desk`). A malformed reply gets one retry first.
-Strikes never end an episode on their own. Refusals count toward the run's
-refusal breaker, and any 401 or 403 trips it at once. A high
-`focal_strike_rate` in one arm is a reason to distrust that arm's comparison.
+When a model's output does not parse, proposes an illegal move, is cut off
+by `max_tokens`, times out, is refused by the provider, or fails with a
+provider error, the episode records a **strike** with the reason
+(`malformed_output`, `illegal_move`, `truncated`, `timeout`, `refusal`,
+`exception`) and applies the environment's fallback move (a no-op in
+`support_desk`). A malformed or empty reply gets one retry first; a
+truncated one does not, since the same cap would cut it off again.
+
+Some failures end the episode instead, so it is never scored on a seat that
+isn't really playing: a request the provider rejects (400 or 422), or three
+turns in a row from one seat whose calls failed outright (timeouts, rate
+limits, network errors). The cell is then recorded as errored. Refusals
+count toward the run's refusal breaker, and any 401, 402, 403 or 404 trips
+it at once. A high `focal_strike_rate` in one arm is a reason to distrust
+that arm's comparison.
 
 ## Traces
 

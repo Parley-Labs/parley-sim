@@ -24,8 +24,11 @@ from typing import Any
 from parley_sim.core.protocol import JSON, TextInterface
 from parley_sim.core.rng import seed_for
 
-# From UserSim's user-agent template, kept verbatim: the persona-realism rules
-# that apply to any conversation, not the help-seeking instructions.
+# From UserSim's general_open_ended prompt template, kept verbatim: the
+# persona-realism rules that apply to any conversation, not the help-seeking
+# instructions.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 _ROLEPLAY_RULES = """Conversational and stylistic considerations:
 - Do NOT reveal you are role-playing.
 - Do NOT use stage directions, bracketed actions, or narrator commentary.
@@ -100,6 +103,14 @@ class UserSimPersonaText:
         self.block, self.meta = usersim_block(persona, locale)
         self.prompt_version = f"{base.prompt_version}+usersim-{self.meta['usersim_version']}"
         self.action_schema = base.action_schema
+        # A conversation seat sends only what changed since its last turn when
+        # the text interface can say so. Forward the base's update renderer
+        # (the persona block lives in the system prompt, which render() still
+        # builds), and leave the attribute absent when the base has none, so
+        # ModelSeat falls back to full prompts exactly as it would unwrapped.
+        update = getattr(base, "render_update", None)
+        if update is not None:
+            self.render_update = update
 
     def render(self, observation: JSON) -> tuple[str, str]:
         system, user = self.base.render(observation)

@@ -24,7 +24,7 @@ Documentation = "https://github.com/Parley-Labs/parley-sim/tree/main/docs"
 Issues = "https://github.com/Parley-Labs/parley-sim/issues"
 
 [project.optional-dependencies]
-anthropic = ["anthropic>=0.40"]
+anthropic = ["anthropic>=0.88"]
 openai = ["openai>=1.50"]
 usersim = [
     "pyarrow>=15",
@@ -73,8 +73,8 @@ layers = [
 ]
 
 [tool.uv]
-# nemo-gym pins anthropic<=0.109.2, older than the structured-output API the
-# anthropic seat uses; resolve the two extras separately.
+# nemo-gym pins anthropic<=0.109.2; resolve the two extras separately so the
+# anthropic extra is not held back by it.
 conflicts = [[{ extra = "gym" }, { extra = "anthropic" }]]
 
 [tool.ruff]

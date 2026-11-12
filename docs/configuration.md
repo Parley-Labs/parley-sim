@@ -56,7 +56,7 @@ Each `lineup` entry:
 | --- | --- | --- |
 | `anthropic` | `ANTHROPIC_API_KEY` | Structured outputs; adaptive thinking with summaries recorded in the trace; `effort` goes to `output_config.effort` |
 | `openai` | `OPENAI_API_KEY` | `response_format` JSON schema; `effort` goes to `reasoning_effort` |
-| `openai_compat` | `OPENROUTER_API_KEY` | Any OpenAI-compatible gateway (OpenRouter, vLLM, NIM); `effort` goes to OpenRouter's `reasoning.effort` |
+| `openai_compat` | `OPENROUTER_API_KEY` for `openrouter.ai`; any other host needs `api_key_env` | Any OpenAI-compatible gateway (OpenRouter, vLLM, NIM); `effort` goes to OpenRouter's `reasoning.effort` |
 | `scripted` | none | Plays a named policy through the text interface; for offline tests |
 | `harness` | none | Calls are made by an external harness (used by the NeMo Gym adapter) |
 
@@ -64,15 +64,22 @@ The key is read from `api_key_env` if set, and a key is only ever sent to the
 host it belongs to, over HTTPS (plain `http://` is allowed only to localhost,
 for a local server such as vLLM):
 
-- `openai_compat` requires `base_url` and never falls back to
+- `openai_compat` requires `base_url`. It reads `OPENROUTER_API_KEY` only
+  when the `base_url` host is `openrouter.ai`; any other gateway (vLLM, NIM,
+  a proxy) requires an explicit `api_key_env`. It never falls back to
   `OPENAI_API_KEY`;
 - `openai` with a custom `base_url` requires an explicit `api_key_env`, so
   `OPENAI_API_KEY` is never sent to another host;
 - `openai` and `anthropic` also treat `OPENAI_BASE_URL` and
   `ANTHROPIC_BASE_URL`, which their SDKs read, as custom endpoints;
-- `anthropic` with a custom `base_url` requires an explicit `api_key_env`,
-  and if `api_key_env` names a variable that
-  is unset, it fails instead of falling back to `ANTHROPIC_API_KEY`.
+- `anthropic` with a custom `base_url` requires an explicit `api_key_env`;
+- to any `base_url` other than OpenAI's own, the `OpenAI-Organization` and
+  `OpenAI-Project` headers, which the OpenAI SDK fills from `OPENAI_ORG_ID`
+  and `OPENAI_PROJECT_ID`, are not sent;
+- every client fails at startup if its key variable is unset or empty,
+  rather than failing every call, and a variable named in `api_key_env`
+  never falls back to the provider's default one. Behind a proxy that
+  injects the real key, any placeholder value works.
 
 To pin OpenRouter to one upstream and get cost reporting (cost is reported
 only for calls OpenRouter bills; calls made with your own provider key
@@ -91,10 +98,27 @@ For a model that might not support structured outputs everywhere, use
 ## Safety and spend
 
 - **Refusal breaker.** All seats in a run share a breaker. It trips on any
-  401 or 403, or after `max_refusals` provider refusals. Once tripped, no
-  further calls are made, the remaining cells are recorded as halted, and
-  `matched` exits with code 2 and a `RUN HALTED` message. Repeated refusals
-  can get a provider account suspended; find the cause before re-running.
+  401, 402, 403 or 404 (bad key, no credit, no access, unknown model: every
+  later call would fail too), or after `max_refusals` provider refusals.
+  Once tripped, no further calls are made, the remaining cells are recorded
+  as halted, and `matched` exits with code 2 and a `RUN HALTED` message.
+  Repeated refusals can get a provider account suspended; find the cause
+  before re-running.
+- **Rejected requests.** A 400 or 422 means the request itself is wrong (an
+  unsupported parameter, a prompt over the context limit). The episode stops
+  at once and its cell is recorded as `errored` with the provider's message,
+  rather than finishing on fallback moves.
+- **Failed calls.** A timeout or any other provider or network error (429,
+  5xx, a dropped connection) is a strike, and the seat plays the
+  environment's fallback move. If a seat's turns fail this way three times
+  in a row, the episode is aborted and its cell recorded as `errored`,
+  naming the seat and the last error. Errored cells run again on resume.
+- **Truncation.** A reply cut off at `max_tokens` is a `truncated` strike,
+  not malformed output, and gets no repair retry. If a model is often
+  truncated, raise its `max_tokens` (a config change, so a new `--out`).
+- **Usage of failed calls.** Refused calls' tokens and cost are counted in
+  the decision's usage, and so in the token cap. Timed-out and failed calls
+  are recorded as attempts without usage.
 - **Token cap.** With `max_total_tokens`, cells that would start after the
   cap is reached are recorded as `skipped_budget`. Episodes already running
   finish, so a run can overshoot by up to `concurrency` episodes. It caps

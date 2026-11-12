@@ -18,7 +18,7 @@ any environment parley-sim can load, including
 | | Local runner | NeMo Gym | OpenEnv |
 | --- | --- | --- | --- |
 | Malformed reply from a model seat | One retry, then a strike | One retry, then a strike | Focal seat: a strike at once (your client owns retries); counterparts: as local |
-| Timeout or provider error | Strike, fallback move | The episode fails (retryable per Gym's rules) | Counterparts: strike, fallback move |
+| Timeout or provider error | Strike, fallback move; a 400 or 422, or three failed turns in a row from one seat, fails the episode; a 401, 402, 403 or 404 halts the run | The episode fails (retryable per Gym's rules) | Counterparts: as local |
 | Refusal breaker scope | The whole run | One episode | One session (all its episodes) |
 
 Status: both adapters are covered by unit tests against the pinned library
