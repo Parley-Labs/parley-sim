@@ -58,3 +58,42 @@ def test_timeout_and_exception_are_strikes():
     assert res.strike == "timeout"
     res = asyncio.run(seat(FakeClient([RuntimeError("503")])).decide(request()))
     assert res.strike == "exception" and "503" in res.detail
+
+
+class HistoryClient(FakeClient):
+    def __init__(self, replies):
+        super().__init__(replies)
+        self.histories = []
+
+    async def complete(self, *, system, user, schema, history=None):
+        self.histories.append(history)
+        return await super().complete(system=system, user=user, schema=schema)
+
+
+def test_conversation_seat_sends_only_what_changed_after_its_own_replies():
+    env = SupportDesk()
+    state = env.initial_state(env.generate(0, {}))
+    client = HistoryClient([GOOD, "nope", GOOD])
+    spec = ModelSpec(name="m", provider="openai_compat", model="x", conversation=True)
+    s = ModelSeat(spec, SupportDeskText(), client)
+    first = env.observe(state, "customer")
+    asyncio.run(s.decide(DecisionRequest("0:customer", "customer", 0, first, {})))
+    state, _ = env.apply(state, "customer", {"message": "hi", "move": {"type": "none"}})
+    state, _ = env.apply(state, "agent", {"message": "Stay with us", "move": {"type": "none"}})
+    second = env.observe(state, "customer")
+    res = asyncio.run(s.decide(DecisionRequest("2:customer", "customer", 2, second, {})))
+    assert res.strike is None
+    # Turn 1: the full prompt, no history. Turn 2: only the agent's new message,
+    # after turn 1's exchange. The repair retry keeps the invalid reply and adds a
+    # correction instead of resending the prompt.
+    assert client.histories[0] == [] and "You speak first." in client.users[0]
+    assert client.histories[1] == [{"user": client.users[0], "assistant": GOOD}]
+    assert "[Counterpart] \"Stay with us\"" in client.users[1]
+    assert "Conversation so far" not in client.users[1] and "[You]" not in client.users[1]
+    assert client.histories[2][-1] == {"user": client.users[1], "assistant": "nope"}
+    assert client.users[2].startswith("Your previous reply was invalid")
+
+
+def test_stateless_seat_is_unchanged():
+    client = FakeClient([GOOD])
+    asyncio.run(seat(client).decide(request()))  # FakeClient takes no history argument

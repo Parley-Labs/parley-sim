@@ -117,6 +117,28 @@ class SupportDeskText:
         ])
         return system, user
 
+    def render_update(self, previous: JSON, observation: JSON) -> str:
+        """The next user message of a conversation seat: what happened since
+        its previous turn (the counterpart's moves; its own are already in the
+        conversation), the standing proposal and the turns left."""
+        new = observation["transcript"][len(previous["transcript"]):]
+        lines = []
+        for e in new:
+            if e["seat"] == observation["role"]:
+                continue
+            move = e["move"]
+            detail = f" {json.dumps(move['deal'])}" if move["type"] == "propose" else ""
+            lines.append(f"[Counterpart] \"{e['message']}\" (move: {move['type']}{detail})")
+        theirs = observation["their_standing_offer"]
+        return "\n".join([
+            *(lines or ["The counterpart has not moved since your last turn."]),
+            "",
+            f"Counterpart's latest proposal: {json.dumps(theirs['deal'])} "
+            f"(value to you: {theirs['value_to_you']})" if theirs
+            else "Counterpart's latest proposal: none",
+            f"Turns you have left, including this one: {observation['your_moves_left']}",
+        ])
+
     def parse(self, payload: Any) -> tuple[JSON, str | None]:
         if isinstance(payload, str):
             try:

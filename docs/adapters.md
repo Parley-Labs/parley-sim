@@ -24,7 +24,8 @@ any environment parley-sim can load, including
 Status: both adapters are covered by unit tests against the pinned library
 versions. The OpenEnv package has also been built as a Docker image and
 played end to end over HTTP. The NeMo Gym adapter has not yet run against a
-live Gym deployment with real agent servers. Reports of what breaks are
+live Gym deployment with real agent servers; its training payload is tested
+through Gym's own rollout-record code, not yet through a NeMo-RL training run. Reports of what breaks are
 welcome.
 
 ## NeMo Gym
@@ -83,6 +84,31 @@ Each task row is one episode:
 
 To compare arms, write task rows for the same seeds with each kind of
 counterpart, and give the matching rows the same `pair_key`.
+
+### Training data
+
+The focal seat plays one growing conversation (`focal_conversation`, on by
+default): each request resends the earlier turns, with the agent's own output
+items exactly as it returned them, then adds what the counterpart did since.
+Each prompt therefore extends the previous one token for token, which is what
+NeMo Gym needs to treat an episode as one continuous training sample.
+
+The episode result carries:
+
+- `response`: a Gym-native Responses object whose `output` is every focal
+  reply in order, with whatever token ids and log probabilities the agent
+  returned. Counterpart replies are never in it. Gym's rollout collector
+  stores it as the rollout's `response`, so `rollout_carries_token_ids` sees
+  the agent's sampled tokens and token capture leaves them as they are.
+- `focal_calls`: every focal request and full response, for audit.
+
+With `focal_conversation: false` the focal seat gets a fresh prompt each turn,
+like a default local run, and the result carries no training payload. To
+evaluate locally with the prompt shape used in training, set
+`conversation: true` on the focal model in the run config.
+
+Tested against the pinned nemo-gym 0.7 code path from episode to collected
+rollout record; not yet with a NeMo-RL training run.
 
 Task rows can name only built-in, registered or entry-point environments. An
 import path (`my_pkg.envs:ENTRY`) in a task row is refused unless the server

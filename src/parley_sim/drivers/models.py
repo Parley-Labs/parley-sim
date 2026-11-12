@@ -38,6 +38,11 @@ class ModelSpec(BaseModel):
     # Condition this seat on a persona; "usersim" = NeMo UserSim's persona and
     # behavior model (see drivers/usersim_persona.py).
     persona: Literal["usersim"] | None = None
+    # Play the seat as one growing conversation: each turn appends what changed
+    # since the seat last acted, after its own earlier replies, instead of a
+    # freshly rendered prompt. Training on NeMo Gym needs this, because one
+    # rollout's token sequence must be continuous.
+    conversation: bool = False
 
     @model_validator(mode="after")
     def _anthropic_has_no_sampling(self) -> ModelSpec:
@@ -62,6 +67,15 @@ class ProviderRefusal(Exception):
 class ProviderClient(Protocol):
     async def complete(self, *, system: str, user: str, schema: JSON) -> tuple[Any, JSON]:
         """(payload, raw). `payload` is a dict or a JSON string."""
+
+
+def _history_messages(history: list[JSON] | None) -> list[JSON]:
+    """Earlier exchanges of a conversation seat as chat messages."""
+    out: list[JSON] = []
+    for turn in history or []:
+        out += [{"role": "user", "content": turn["user"]},
+                {"role": "assistant", "content": turn["assistant"]}]
+    return out
 
 
 def _check_endpoint(name: str, url: str | None) -> None:
@@ -96,13 +110,15 @@ class AnthropicClient:
         self._client = anthropic.AsyncAnthropic(api_key=os.environ.get(env),
                                                 base_url=spec.base_url)
 
-    async def complete(self, *, system: str, user: str, schema: JSON) -> tuple[Any, JSON]:
+    async def complete(self, *, system: str, user: str, schema: JSON,
+                       history: list[JSON] | None = None) -> tuple[Any, JSON]:
         output_config: dict[str, Any] = {"format": {"type": "json_schema", "schema": schema}}
         if self.spec.effort is not None:
             output_config["effort"] = self.spec.effort
         kwargs: dict[str, Any] = {
             "model": self.spec.model, "max_tokens": self.spec.max_tokens, "system": system,
-            "messages": [{"role": "user", "content": user}], "output_config": output_config,
+            "messages": [*_history_messages(history), {"role": "user", "content": user}],
+            "output_config": output_config,
             "thinking": {"type": "adaptive", "display": "summarized"},
         }
         if self.spec.temperature is not None:
@@ -152,12 +168,13 @@ class OpenAIClient:
             raise RuntimeError(f"{env} is not set")
         self._client = AsyncOpenAI(base_url=base_url, api_key=key)
 
-    async def complete(self, *, system: str, user: str, schema: JSON) -> tuple[Any, JSON]:
+    async def complete(self, *, system: str, user: str, schema: JSON,
+                       history: list[JSON] | None = None) -> tuple[Any, JSON]:
         compat = self.spec.provider != "openai"
         kwargs: dict[str, Any] = {
             "model": self.spec.model,
             ("max_tokens" if compat else "max_completion_tokens"): self.spec.max_tokens,
-            "messages": [{"role": "system", "content": system},
+            "messages": [{"role": "system", "content": system}, *_history_messages(history),
                          {"role": "user", "content": user}],
             "response_format": {"type": "json_schema",
                                 "json_schema": {"name": "turn", "schema": schema}},
@@ -267,21 +284,38 @@ class ModelSeat:
         self.text = text
         self.client = client
         self.breaker = breaker or Breaker()
+        # Conversation mode: every completed exchange, in order, and the
+        # observation at this seat's previous turn.
+        self.history: list[JSON] = []
+        self._previous: JSON | None = None
+
+    def _prompt(self, observation: JSON) -> tuple[str, str]:
+        system, user = self.text.render(observation)
+        if self.spec.conversation and self._previous is not None:
+            update = getattr(self.text, "render_update", None)
+            if update is not None:
+                user = update(self._previous, observation)
+        return system, user
 
     async def decide(self, req: DecisionRequest) -> DecisionResult:
-        system, user = self.text.render(req.observation)
+        system, user = self._prompt(req.observation)
+        self._previous = req.observation
         attempts: list[JSON] = []
         error: str | None = None
         for _ in range(2):
             self.breaker.check()
             if error is not None:
-                user = (f"{user}\n\nYour previous reply was invalid ({error}). Reply again "
-                        "with only a JSON object matching the schema.")
+                correction = (f"Your previous reply was invalid ({error}). Reply again "
+                              "with only a JSON object matching the schema.")
+                # A conversation keeps the invalid reply and adds the correction;
+                # otherwise the correction goes onto the same prompt.
+                user = correction if self.spec.conversation else f"{user}\n\n{correction}"
             started = time.monotonic()
+            extra = {"history": list(self.history)} if self.spec.conversation else {}
             try:
                 payload, raw = await asyncio.wait_for(
                     self.client.complete(system=system, user=user,
-                                         schema=self.text.action_schema),
+                                         schema=self.text.action_schema, **extra),
                     timeout=self.spec.timeout_s)
             except TimeoutError:
                 return self._result(req, attempts, strike="timeout")
@@ -297,6 +331,9 @@ class ModelSeat:
                 return self._result(req, attempts, strike="exception", detail=repr(exc))
             attempts.append({**raw, "payload": payload,
                              "latency_s": round(time.monotonic() - started, 3)})
+            if self.spec.conversation:
+                self.history.append({"user": user, "assistant": payload if isinstance(payload, str)
+                                     else json.dumps(payload)})
             try:
                 action, explanation = self.text.parse(payload)
             except MalformedOutput as exc:

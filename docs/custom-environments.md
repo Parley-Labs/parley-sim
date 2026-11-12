@@ -64,7 +64,11 @@ would see. Give your policies a range (in the example, `firm` and
 
 ## The text interface
 
-`render(observation) -> (system, user)` builds the prompt;
+`render(observation) -> (system, user)` builds the prompt; optionally,
+`render_update(previous, observation) -> str` builds the next user message of
+a conversation seat (what changed since its previous turn; see
+`conversation` in [configuration](configuration.md#model-specs)), and without
+it a conversation seat resends the full rendered prompt each turn;
 `action_schema` is the JSON schema sent to providers for structured output;
 `parse(payload) -> (action, explanation)` turns the model's reply into an
 action, raising `MalformedOutput` when it can't. Bump `prompt_version`
