@@ -132,3 +132,24 @@ def test_state_hides_private_information_until_the_episode_ends():
 def test_misconfiguration_fails_at_startup(kwargs, match):
     with pytest.raises(ValueError, match=match):
         ParleySimEnvironment(**{"seats": SCRIPTED, **kwargs})
+
+
+def test_focal_decisions_mid_episode_carry_no_evaluation_context():
+    env = ParleySimEnvironment(seats={"agent": "client", "customer": "policy:hardliner"})
+    obs = env.reset(seed=11)
+    policy = make_policy("agent_scripted", "agent")
+    while not obs.done and not any(l["type"] == "decision" for l in env.state.trace):
+        obs = env.step(ParleySimAction(move=policy.decide(obs.observation)))
+    assert not obs.done  # seed 11: the customer's offer is still standing
+    mid = env.state.trace
+    assert any(l["type"] == "decision" for l in mid)
+    assert all("context" not in l for l in mid)
+    assert "counterpart_value" not in json.dumps(mid)
+
+
+def test_closed_session_refuses_further_episodes():
+    env = ParleySimEnvironment(seats=SCRIPTED)
+    env.reset(seed=1)
+    env.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        env.reset(seed=2)

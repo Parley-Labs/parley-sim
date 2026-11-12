@@ -146,3 +146,15 @@ def test_anthropic_requests_summarized_thinking(monkeypatch):
     _, raw = asyncio.run(client.complete(system="s", user="u", schema={}))
     assert rec.kwargs["thinking"] == {"type": "adaptive", "display": "summarized"}
     assert raw["provider_reasoning"] == "plan"
+
+
+def test_custom_endpoints_need_an_explicit_key_variable(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "secret")
+    with pytest.raises(ValueError, match="api_key_env"):
+        AnthropicClient(ModelSpec(name="a", provider="anthropic", model="m", base_url=GATEWAY))
+    monkeypatch.setenv("OPENAI_BASE_URL", GATEWAY)  # the SDK would send the key here
+    with pytest.raises(ValueError, match="api_key_env"):
+        OpenAIClient(ModelSpec(name="o", provider="openai", model="m"))
+    monkeypatch.setenv("OPENAI_BASE_URL", "")
+    OpenAIClient(ModelSpec(name="o", provider="openai", model="m"))  # default endpoint is fine

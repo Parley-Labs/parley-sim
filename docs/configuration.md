@@ -66,7 +66,10 @@ host it belongs to:
   `OPENAI_API_KEY`;
 - `openai` with a custom `base_url` requires an explicit `api_key_env`, so
   `OPENAI_API_KEY` is never sent to another host;
-- `anthropic` honours `base_url`, and if `api_key_env` names a variable that
+- `openai` also treats `OPENAI_BASE_URL`, which the OpenAI SDK reads, as a
+  custom endpoint;
+- `anthropic` with a custom `base_url` requires an explicit `api_key_env`,
+  and if `api_key_env` names a variable that
   is unset, it fails instead of falling back to `ANTHROPIC_API_KEY`.
 
 To pin OpenRouter to one upstream and get cost reporting (cost is reported

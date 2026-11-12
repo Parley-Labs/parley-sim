@@ -191,3 +191,30 @@ def test_equivalence_verdicts_and_diversity(tmp_path):
     assert "opening_distinct2" in div["per_arm"]["soc"]
     assert 0 <= div["comparisons"]["aoc vs soc"]["opening_distinct2"]["p"] <= 1
     assert distinct2(["a b c", "a b c"]) == 0.5 and distinct2(["a b", "c d"]) == 1.0
+
+
+def test_report_refuses_an_arm_defined_differently_in_two_runs(tmp_path):
+    base = cfg()
+    asyncio.run(run_matched(base, tmp_path / "a"))
+    order = list(reversed(base.scripted_counterparts))
+    asyncio.run(run_matched(cfg(run_id="b", seeds="4:8", scripted_counterparts=order,
+                                run_arms=["soc"]), tmp_path / "b"))
+    with pytest.raises(ValueError, match="defined differently"):
+        build_report(tmp_path / "a", tmp_path / "b")
+
+
+def test_halt_summary_counts_cells_not_the_halt_row(tmp_path):
+    import json
+
+    from parley_sim.cli import halt_summary
+    m = tmp_path / "manifest.jsonl"
+    rows = [{"type": "run"}, {"type": "cell", "status": "done"},
+            {"type": "cell", "status": "skipped_halted", "error": "run halted: 3 refusals"},
+            {"type": "halt", "reason": "3 refusals"}]
+    m.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    reason, halted = halt_summary(m)
+    assert reason == "3 refusals" and len(halted) == 1
+    m.write_text(json.dumps({"type": "run"}) + "\n" + json.dumps({"type": "halt", "reason": "403"}) + "\n")
+    assert halt_summary(m) == ("403", [])
+    m.write_text(json.dumps({"type": "run"}) + "\n")
+    assert halt_summary(m) is None
