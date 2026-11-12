@@ -297,7 +297,9 @@ _TRUNCATED = frozenset({"max_tokens", "length"})
 
 
 def _is_fatal(exc: Exception) -> bool:
-    return getattr(exc, "status_code", None) in _FATAL_STATUS
+    status = getattr(exc, "status_code", None)
+    # Anthropic reports an exhausted credit balance as a 400, not a 402.
+    return status in _FATAL_STATUS or (status == 400 and "credit balance" in str(exc).lower())
 
 
 def _is_blank(payload: Any) -> bool:

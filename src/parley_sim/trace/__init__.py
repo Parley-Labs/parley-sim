@@ -73,6 +73,6 @@ def read_jsonl_tolerant(path: str | Path) -> list[dict[str, Any]]:
 def is_complete(path: str | Path) -> bool:
     try:
         lines = read_trace(path)
-    except (OSError, ValueError):  # JSONDecodeError and UnicodeDecodeError
+    except (OSError, ValueError, RecursionError):  # JSONDecodeError, UnicodeDecodeError, deep nesting
         return False
     return bool(lines) and lines[-1].get("type") == "footer"

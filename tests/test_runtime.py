@@ -289,3 +289,12 @@ def test_cli_verify_reports_bad_files_without_a_traceback(tmp_path, capsys, cont
     path.write_text(content)
     assert main(["verify", str(path)]) == 1
     assert problem in capsys.readouterr().out
+
+
+def test_verify_reports_a_deeply_nested_trace_instead_of_crashing(tmp_path):
+    from parley_sim.cli import verify_file
+    from parley_sim.trace import is_complete
+    bad = tmp_path / "deep.jsonl"
+    bad.write_text("[" * 200_000 + "]" * 200_000 + "\n")
+    problems = verify_file(bad)
+    assert problems and not is_complete(bad)

@@ -417,6 +417,13 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
             if episode.result is None:
                 episode.abort(repr(exc))
             self._state.done = True
+            if self.release_trace == "never" and isinstance(exc, Exception) and not self._closed:
+                # The provider's error names the counterpart's model, gateway or
+                # account; with counterpart details withheld it stays in the log
+                # and the (unreleased) errored footer.
+                _log.warning("counterpart turn failed, episode aborted: %r", exc)
+                raise RuntimeError("a counterpart turn failed, so the episode was aborted; "
+                                   "the server log has the details") from None
             raise
         if isinstance(event, EpisodeComplete):
             metrics = self.entry.episode_metrics(episode.lines)

@@ -99,7 +99,8 @@ For a model that might not support structured outputs everywhere, use
 
 - **Refusal breaker.** All seats in a run share a breaker. It trips on any
   401, 402, 403 or 404 (bad key, no credit, no access, unknown model: every
-  later call would fail too), or after `max_refusals` provider refusals.
+  later call would fail too), on Anthropic's "credit balance is too low"
+  (which arrives as a 400), or after `max_refusals` provider refusals.
   Once tripped, no further model calls are made and cells that have not
   started are recorded as `skipped_halted`. Cells already running are not
   cancelled: one that needs another call ends `errored`, and one that needs
@@ -129,8 +130,8 @@ For a model that might not support structured outputs everywhere, use
   Episodes already running finish, so a run can overshoot by up to
   `concurrency` episodes. It caps tokens, not money.
 - **Exit codes.** `matched` exits 0 when every cell is done, 1 when any cell
-  errored (each distinct error is printed with its count), and 2 when the
-  run halted.
+  errored (each distinct error is printed with its count) or was skipped at
+  the token cap, and 2 when the run halted.
 - **Refusals are strikes, not substitutions.** No client silently falls back
   to another model, which would contaminate the evaluation.
 

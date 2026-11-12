@@ -248,6 +248,7 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
     # Usage of cell attempts the resume rewrite drops (errored, skipped, cut),
     # carried in the run row across resumes so the token cap is per run.
     prior_usage = dict.fromkeys(_USAGE_KEYS, 0)
+    rowed: set[str] = set()  # cells with a manifest row, whose usage that row carries
     if manifest.exists():
         rows = read_jsonl_tolerant(manifest)  # a torn last line is healed by the rewrite
         prior = next((r for r in rows if r["type"] == "run"), None)
@@ -264,6 +265,7 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
         for k in _USAGE_KEYS:
             prior_usage[k] += (prior.get("prior_usage") or {}).get(k, 0)
         cell_rows = [r for r in rows if r["type"] == "cell"]
+        rowed = {r["cell_key"] for r in cell_rows}
         for r in cell_rows:
             if r["status"] == "done" and r.get("trace") and is_complete(out / r["trace"]):
                 done[r["cell_key"]] = r
@@ -271,6 +273,17 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
             if done.get(r["cell_key"]) is not r:
                 for k in _USAGE_KEYS:
                     prior_usage[k] += (r.get("usage") or {}).get(k, 0)
+    # A cell cut off mid-episode (Ctrl-C, a killed process) has a trace but no
+    # row; its calls were paid for, so they count toward the cap too.
+    for cell in cells:
+        trace = out / "traces" / f"{cell.cell_key}.jsonl"
+        if cell.cell_key not in done and cell.cell_key not in rowed and trace.exists():
+            try:
+                cut = _usage(trace)
+            except (OSError, RecursionError):
+                continue
+            for k in _USAGE_KEYS:
+                prior_usage[k] += cut.get(k, 0)
     if any(prior_usage.values()):
         run_row["prior_usage"] = prior_usage
     _write_atomic(manifest, [run_row, *done.values()])

@@ -37,8 +37,8 @@ def verify_file(path: str | Path, entry: envs.EnvEntry | None = None) -> list[st
         lines = read_trace(path)
     except OSError as exc:
         return [f"unreadable: {exc}"]
-    except ValueError as exc:  # JSONDecodeError, UnicodeDecodeError
-        return [f"truncated or unparsable: {exc}"]
+    except (ValueError, RecursionError) as exc:  # JSONDecodeError, UnicodeDecodeError, deep nesting
+        return [f"truncated or unparsable: {type(exc).__name__}: {str(exc)[:200]}"]
     if not lines:
         return ["empty"]
     if entry is None:
@@ -48,7 +48,10 @@ def verify_file(path: str | Path, entry: envs.EnvEntry | None = None) -> list[st
             return [f"no environment named in the header: {exc!r}"]
         except ValueError as exc:
             return [f"{exc}; pass --env to name the environment"]
-    return verify(entry.env(), lines, make_policy=entry.make_policy)
+    try:
+        return verify(entry.env(), lines, make_policy=entry.make_policy)
+    except RecursionError:
+        return ["nested too deeply to check"]
 
 
 def _verify_dir(out: Path) -> list[str]:
@@ -91,8 +94,11 @@ def cmd_matched(args: argparse.Namespace) -> int:
         reason, halted = summary
         print(f"RUN HALTED to protect the provider account: {reason}\n"
               f"{len(halted)} cells did not run. Find the cause before re-running.\n")
-    errors = Counter(r.get("error") or "unknown error" for r in load_manifest(args.out)[1]
-                     if r["status"] == "errored")
+    rows = load_manifest(args.out)[1]
+    errors = Counter(r.get("error") or "unknown error" for r in rows if r["status"] == "errored")
+    over_budget = sum(r["status"] == "skipped_budget" for r in rows)
+    if over_budget:
+        print(f"{over_budget} cells did not run: the token cap (max_total_tokens) was reached.\n")
     if errors:
         print(f"{sum(errors.values())} cells errored:")
         for error, n in errors.most_common():
@@ -100,7 +106,7 @@ def cmd_matched(args: argparse.Namespace) -> int:
         print()
     print(render(build_report(args.out)))
     print(f"manifest: {manifest}")
-    return 2 if summary is not None else 1 if errors else 0
+    return 2 if summary is not None else 1 if errors or over_budget else 0
 
 
 def _fail(cmd: str, exc: Exception) -> int:
