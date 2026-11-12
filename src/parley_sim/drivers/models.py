@@ -61,7 +61,13 @@ class EpisodeAbort(Exception):
 
 
 class ProviderRefusal(Exception):
-    """The provider declined to answer (a safety stop, not malformed output)."""
+    """The provider declined to answer (a safety stop, not malformed output).
+    `raw` is the response metadata (served model, usage), so a refused call's
+    tokens and cost are still counted."""
+
+    def __init__(self, detail: str = "refusal", raw: JSON | None = None):
+        super().__init__(detail)
+        self.raw: JSON = raw or {}
 
 
 class ProviderClient(Protocol):
@@ -111,9 +117,13 @@ class AnthropicClient:
                              "ANTHROPIC_API_KEY is never sent to another host")
         _check_endpoint(spec.name, base_url)
         env = spec.api_key_env or "ANTHROPIC_API_KEY"
-        if spec.api_key_env and not os.environ.get(env):
-            raise RuntimeError(f"{env} is not set")  # never fall back to ANTHROPIC_API_KEY
-        self._client = anthropic.AsyncAnthropic(api_key=os.environ.get(env), base_url=base_url)
+        key = os.environ.get(env)
+        if not key:
+            # Fail at startup, not on every call. A named variable never falls
+            # back to ANTHROPIC_API_KEY. Behind a proxy that injects the real
+            # key, any placeholder value works.
+            raise RuntimeError(f"{env} is not set")
+        self._client = anthropic.AsyncAnthropic(api_key=key, base_url=base_url)
 
     async def complete(self, *, system: str, user: str, schema: JSON,
                        history: list[JSON] | None = None) -> tuple[Any, JSON]:
@@ -130,17 +140,15 @@ class AnthropicClient:
             kwargs["temperature"] = self.spec.temperature
         kwargs.update(self.spec.provider_params or {})
         resp = await self._client.messages.create(**kwargs)
+        raw: JSON = {"served_model": resp.model, "stop_reason": resp.stop_reason,
+                     "usage": {"input_tokens": resp.usage.input_tokens,
+                               "output_tokens": resp.usage.output_tokens}}
         if resp.stop_reason == "refusal":
             details = getattr(resp, "stop_details", None)
-            raise ProviderRefusal(getattr(details, "category", None) or "refusal")
+            raise ProviderRefusal(getattr(details, "category", None) or "refusal", raw=raw)
         payload = next((b.text for b in resp.content if b.type == "text"), None)
         thinking = [b.thinking for b in resp.content if b.type == "thinking"]
-        return payload, {
-            "served_model": resp.model, "stop_reason": resp.stop_reason,
-            "usage": {"input_tokens": resp.usage.input_tokens,
-                      "output_tokens": resp.usage.output_tokens},
-            "provider_reasoning": "\n".join(thinking) or None,
-        }
+        return payload, {**raw, "provider_reasoning": "\n".join(thinking) or None}
 
 
 class OpenAIClient:
@@ -163,6 +171,11 @@ class OpenAIClient:
         _check_endpoint(spec.name, base_url)
         if spec.provider == "openai_compat" and not spec.base_url:
             raise ValueError(f"{spec.name}: provider 'openai_compat' needs base_url")
+        from urllib.parse import urlparse
+        host = urlparse(base_url).hostname if base_url else None
+        if spec.provider == "openai_compat" and not spec.api_key_env and host != "openrouter.ai":
+            raise ValueError(f"{spec.name}: provider 'openai_compat' with base_url host {host!r} "
+                             "needs api_key_env; OPENROUTER_API_KEY is sent only to openrouter.ai")
         env = spec.api_key_env or ("OPENAI_API_KEY" if spec.provider == "openai"
                                    else "OPENROUTER_API_KEY")
         key = os.environ.get(env)
@@ -171,7 +184,14 @@ class OpenAIClient:
             # OpenAI secret to whatever gateway base_url points at. Behind a
             # proxy that injects the real key, any placeholder value works.
             raise RuntimeError(f"{env} is not set")
-        self._client = AsyncOpenAI(base_url=base_url, api_key=key)
+        headers: dict[str, Any] | None = None
+        if base_url and host != "api.openai.com":
+            # The SDK fills OpenAI-Organization and OpenAI-Project from
+            # OPENAI_ORG_ID / OPENAI_PROJECT_ID even when passed None; Omit()
+            # removes them, so OpenAI account identifiers stay with OpenAI.
+            from openai import Omit
+            headers = {"OpenAI-Organization": Omit(), "OpenAI-Project": Omit()}
+        self._client = AsyncOpenAI(base_url=base_url, api_key=key, default_headers=headers)
 
     async def complete(self, *, system: str, user: str, schema: JSON,
                        history: list[JSON] | None = None) -> tuple[Any, JSON]:
@@ -196,21 +216,21 @@ class OpenAIClient:
                 kwargs["reasoning_effort"] = self.spec.effort
         kwargs.update(params)
         resp = await self._client.chat.completions.create(**kwargs)
-        if resp.choices[0].finish_reason == "content_filter":
-            raise ProviderRefusal("content_filter")
-        msg = resp.choices[0].message
-        if getattr(msg, "refusal", None):  # structured-output refusals arrive with finish "stop"
-            raise ProviderRefusal(f"refusal: {msg.refusal[:200]}")
         usage = resp.usage
         cost = getattr(usage, "cost", None)  # OpenRouter, when usage accounting is on
-        return msg.content, {
+        raw: JSON = {
             "served_model": resp.model, "stop_reason": resp.choices[0].finish_reason,
             "usage": {"input_tokens": getattr(usage, "prompt_tokens", 0) or 0,
                       "output_tokens": getattr(usage, "completion_tokens", 0) or 0,
                       **({"cost_usd": float(cost)} if cost is not None else {})},
-            "provider_reasoning": getattr(msg, "reasoning", None)
-            or getattr(msg, "reasoning_content", None),
         }
+        if resp.choices[0].finish_reason == "content_filter":
+            raise ProviderRefusal("content_filter", raw=raw)
+        msg = resp.choices[0].message
+        if getattr(msg, "refusal", None):  # structured-output refusals arrive with finish "stop"
+            raise ProviderRefusal(f"refusal: {msg.refusal[:200]}", raw=raw)
+        return msg.content, {**raw, "provider_reasoning": getattr(msg, "reasoning", None)
+                             or getattr(msg, "reasoning_content", None)}
 
 
 def build_client(spec: ModelSpec) -> ProviderClient:
@@ -222,10 +242,11 @@ def build_client(spec: ModelSpec) -> ProviderClient:
 
 
 def _usage_raw(spec: ModelSpec, text: TextInterface, attempts: list[JSON]) -> JSON:
-    usage: JSON = {k: sum(a.get("usage", {}).get(k, 0) for a in attempts)
-                   for k in ("input_tokens", "output_tokens")}
-    if any("cost_usd" in a.get("usage", {}) for a in attempts):
-        usage["cost_usd"] = sum(a.get("usage", {}).get("cost_usd", 0.0) for a in attempts)
+    # Failed calls leave stub attempts with no usage; they count as attempts only.
+    used = [a.get("usage") or {} for a in attempts]
+    usage: JSON = {k: sum(u.get(k, 0) or 0 for u in used) for k in ("input_tokens", "output_tokens")}
+    if any("cost_usd" in u for u in used):
+        usage["cost_usd"] = sum(u.get("cost_usd", 0.0) or 0.0 for u in used)
     raw: JSON = {"model": spec.name, "model_id": spec.model, "prompt_version": text.prompt_version,
                  "usage": usage, "attempts": attempts}
     if getattr(text, "meta", None):
@@ -238,7 +259,7 @@ class ProviderHalted(RuntimeError):
 
 
 class Breaker:
-    """Shared by every seat in a run. Trips on any 401/403 or after
+    """Shared by every seat in a run. Trips on any 401/402/403/404 or after
     `max_refusals` refusals; once tripped, seats raise instead of calling the
     provider again. Repeated refusals can get an account suspended, so a run
     that is being refused must stop, not grind through its grid."""
@@ -261,8 +282,30 @@ class Breaker:
             raise ProviderHalted(self.tripped)
 
 
+# Bad key, out of credit, no access, unknown model: every later call would
+# fail the same way, so the run halts.
+_FATAL_STATUS = frozenset({401, 402, 403, 404})
+# The request itself is invalid (bad parameter, unsupported option, prompt too
+# long): the episode errors with the provider's message instead of being
+# scored on fallback moves.
+_REQUEST_ERROR_STATUS = frozenset({400, 422})
+# Turns in a row whose calls all failed (timeouts, 429s, network errors)
+# before a seat gives up and aborts the episode.
+MAX_CONSECUTIVE_FAILURES = 3
+# Stop reasons meaning the reply hit the output cap (Anthropic, OpenAI).
+_TRUNCATED = frozenset({"max_tokens", "length"})
+
+
 def _is_fatal(exc: Exception) -> bool:
-    return getattr(exc, "status_code", None) in (401, 403)
+    return getattr(exc, "status_code", None) in _FATAL_STATUS
+
+
+def _is_blank(payload: Any) -> bool:
+    return payload is None or (isinstance(payload, str) and not payload.strip())
+
+
+def _since(started: float) -> float:
+    return round(time.monotonic() - started, 3)
 
 
 class ScriptedSeat:
@@ -296,6 +339,8 @@ class ModelSeat:
         # The action this seat's last turn submitted (None: no usable reply),
         # so the next update can say when the environment recorded otherwise.
         self._submitted: JSON | None = None
+        # Turns in a row that ended in a timeout or exception strike.
+        self._failures = 0
 
     def _prompt(self, observation: JSON) -> tuple[str, str]:
         system, user = self.text.render(observation)
@@ -310,14 +355,16 @@ class ModelSeat:
         self._submitted = None
         attempts: list[JSON] = []
         error: str | None = None
+        in_history = False  # whether the invalid reply being corrected is in the conversation
         for _ in range(2):
             self.breaker.check()
             if error is not None:
                 correction = (f"Your previous reply was invalid ({error}). Reply again "
                               "with only a JSON object matching the schema.")
-                # A conversation keeps the invalid reply and adds the correction;
-                # otherwise the correction goes onto the same prompt.
-                user = correction if self.spec.conversation else f"{user}\n\n{correction}"
+                # A conversation keeps an invalid reply and adds the correction as
+                # the next turn; otherwise, or when there was no reply to keep,
+                # the correction goes onto the same prompt.
+                user = correction if in_history else f"{user}\n\n{correction}"
             started = time.monotonic()
             extra = {"history": list(self.history)} if self.spec.conversation else {}
             try:
@@ -326,20 +373,32 @@ class ModelSeat:
                                          schema=self.text.action_schema, **extra),
                     timeout=self.spec.timeout_s)
             except TimeoutError:
-                return self._result(req, attempts, strike="timeout")
+                detail = f"no reply within timeout_s={self.spec.timeout_s}"
+                attempts.append({"error": detail, "latency_s": _since(started)})
+                return self._failed(req, attempts, "timeout", detail)
             except EpisodeAbort:
                 raise
             except ProviderRefusal as exc:
+                self._failures = 0
+                attempts.append({**exc.raw, "stop_reason": "refusal", "detail": str(exc),
+                                 "latency_s": _since(started)})
                 self.breaker.refusal(str(exc))
                 return self._result(req, attempts, strike="refusal", detail=str(exc))
             except Exception as exc:  # provider/network errors are a seat failure, not a crash
                 if _is_fatal(exc):
                     self.breaker.fatal(repr(exc))
                     raise ProviderHalted(repr(exc)) from exc
-                return self._result(req, attempts, strike="exception", detail=repr(exc))
-            attempts.append({**raw, "payload": payload,
-                             "latency_s": round(time.monotonic() - started, 3)})
-            if self.spec.conversation:
+                if getattr(exc, "status_code", None) in _REQUEST_ERROR_STATUS:
+                    raise EpisodeAbort(f"{self.spec.name} at seat {req.seat}: provider rejected "
+                                       f"the request: {exc!r}"[:2000], retryable=False) from exc
+                attempts.append({"error": repr(exc)[:2000], "latency_s": _since(started)})
+                return self._failed(req, attempts, "exception", repr(exc))
+            self._failures = 0
+            attempts.append({**raw, "payload": payload, "latency_s": _since(started)})
+            blank = _is_blank(payload)
+            if self.spec.conversation and not blank:
+                # An empty reply never enters the conversation (the Anthropic API
+                # rejects empty assistant turns); it is retried like a failed call.
                 self.history.append({"user": user, "assistant": payload if isinstance(payload, str)
                                      else json.dumps(payload)})
                 # Only a turn that reached the conversation moves its start point:
@@ -347,14 +406,35 @@ class ModelSeat:
                 # everything since the last reply the model actually gave.
                 self._previous = req.observation
             try:
+                if blank:
+                    raise MalformedOutput("empty reply")
                 action, explanation = self.text.parse(payload)
             except MalformedOutput as exc:
+                if raw.get("stop_reason") in _TRUNCATED:
+                    # Cut off by the output cap, not malformed by the model; the
+                    # same request would be cut off again, so no repair retry.
+                    return self._result(req, attempts, strike="truncated", detail=(
+                        f"reply cut off at max_tokens={self.spec.max_tokens} "
+                        f"(stop_reason {raw.get('stop_reason')!r})"))
                 error = str(exc)
+                in_history = self.spec.conversation and not blank
                 continue
             self._submitted = action
             return self._result(req, attempts, action=action,
                                 reasoning=raw.get("provider_reasoning"), explanation=explanation)
         return self._result(req, attempts, strike="malformed_output", detail=error)
+
+    def _failed(self, req: DecisionRequest, attempts: list[JSON], strike: str,
+                detail: str) -> DecisionResult:
+        """A turn whose call failed outright. A seat whose calls keep failing
+        (persistent 429s, a dead network) aborts the episode rather than let it
+        finish on fallback moves."""
+        self._failures += 1
+        if self._failures >= MAX_CONSECUTIVE_FAILURES:
+            raise EpisodeAbort(f"{self.spec.name} at seat {req.seat}: {self._failures} turns in a "
+                               f"row failed ({strike}); last error: {detail}"[:2000],
+                               retryable=True)
+        return self._result(req, attempts, strike=strike, detail=detail)
 
     def _result(self, req: DecisionRequest, attempts: list[JSON], *, action: JSON | None = None,
                 reasoning: str | None = None, explanation: str | None = None,
