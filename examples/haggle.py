@@ -6,6 +6,7 @@ cost and the buyer's value are private. Run it with parley-sim by giving its
 import path as the config's `env`:
 
     PYTHONPATH=examples parley-sim matched examples/haggle.yaml --out runs/haggle
+    PYTHONPATH=examples parley-sim report runs/haggle --env haggle:ENTRY
 
 Everything parley-sim needs is the `ENTRY` at the bottom of this file.
 """

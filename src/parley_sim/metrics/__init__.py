@@ -20,6 +20,7 @@ permutation test).
 """
 from __future__ import annotations
 
+import math
 import random
 import statistics
 from collections import defaultdict
@@ -29,11 +30,11 @@ from typing import Any
 from parley_sim import envs
 from parley_sim.core.hashing import digest
 from parley_sim.core.specs import canonical_model_spec
-from parley_sim.trace import iter_trace, read_trace
+from parley_sim.trace import read_jsonl_tolerant, read_trace
 
 
 def load_manifest(out_dir: str | Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    rows = list(iter_trace(Path(out_dir) / "manifest.jsonl"))
+    rows = read_jsonl_tolerant(Path(out_dir) / "manifest.jsonl")
     run = next(r for r in rows if r["type"] == "run")
     latest: dict[str, dict[str, Any]] = {}
     for r in rows:
@@ -52,7 +53,8 @@ def bootstrap_ci(values: list[float], n: int = 2000, seed: int = 0,
     rng = random.Random(seed)
     means = sorted(statistics.fmean(rng.choices(values, k=len(values))) for _ in range(n))
     tail = (1 - level) / 2
-    return means[int(tail * n)], means[int((1 - tail) * n) - 1]
+    # round, not int: (1 - 0.90) / 2 * 2000 is 99.99999999999997 in floating point
+    return means[round(tail * n)], means[round((1 - tail) * n) - 1]
 
 
 def _paired_stat_ci(pairs: list[tuple[Any, Any]], stat, n: int = 2000,
@@ -144,10 +146,82 @@ def _check_panels(panels: dict[tuple[str, str], list[tuple[str | None, str]]]) -
                              f"{seen[0][1]} and {next(o for d, o in seen if d != seen[0][0])}")
 
 
-def build_report(*out_dirs: str | Path,
-                 margins: dict[str, float] | None = None) -> dict[str, Any]:
+def resolve_env(run_env: str, where: str | Path, env: str | None = None,
+                env_entry: envs.EnvEntry | None = None) -> envs.EnvEntry:
+    """The environment for a run whose manifest names `run_env`. An import
+    path read from a manifest is never imported: the user names it with
+    `env` (the --env flag), which must then match the run."""
+    if env is None:
+        try:
+            return envs.get(run_env)
+        except ValueError:
+            if envs.is_import_path(run_env):
+                raise ValueError(f"{where} uses env {run_env!r}, an import path, which is not "
+                                 f"imported from a manifest; pass it yourself with "
+                                 f"--env {run_env}") from None
+            raise
+    entry = env_entry or envs.get(env, allow_import=True)
+    own = entry.env().name
+    # A manifest's import path may differ from --env (the module moved); the
+    # trace headers, which record the env's own name, are checked as well.
+    if run_env in (env, own) or envs.is_import_path(run_env) \
+            or envs.registry().get(run_env) == entry:
+        return entry
+    raise ValueError(f"--env {env!r} is env {own!r}, but {where} was run on {run_env!r}")
+
+
+def _members(config: dict[str, Any], arm: str) -> list[str]:
+    return list(config["scripted_counterparts"]) if arm == "soc" else _arm_members(config, arm)
+
+
+def _check_rotation(cells: dict[tuple[int, str, str, int], dict[str, Any]],
+                    runs: list[dict[str, Any]], outs: list[str]) -> None:
+    """Refuse a cross-run join that pairs counterparts no single run would.
+
+    Within a run, the counterpart of seed index i in an arm with members M is
+    M[(i + j) % len(M)] (j: the non-focal seat), with the same i in every arm.
+    So arms a and b of one run only ever meet as (M_a[p], M_b[q]) with
+    p = q (mod gcd(|M_a|, |M_b|)). Runs whose seed lists start at different
+    points of the rotation can break that when joined: a plain "opus" arm met
+    by a persona arm's "sonnet" on every seed, or two replicates of one arm
+    with different members, would put the counterpart's model inside the
+    paired delta or the noise floor. Arm pairs that never share a rotation
+    (three scripted counterparts against two models: gcd 1) are unaffected."""
+    by_pair: dict[tuple[int, str], list[dict[str, Any]]] = defaultdict(list)
+    for (seed, focal, _arm, _r), c in cells.items():
+        by_pair[(seed, focal)].append(c)
+    for (seed, focal), group in sorted(by_pair.items()):
+        for i, c1 in enumerate(group):
+            for c2 in group[i + 1:]:
+                if c1["_run"] == c2["_run"]:
+                    continue
+                m1 = _members(runs[c1["_run"]]["config"], c1["arm"])
+                m2 = _members(runs[c2["_run"]]["config"], c2["arm"])
+                g = math.gcd(len(m1), len(m2))
+                if g < 2:
+                    continue
+                for seat in sorted(set(c1.get("seats") or {}) & set(c2.get("seats") or {})):
+                    if seat == c1.get("focal_seat"):
+                        continue
+                    n1 = c1["seats"][seat].split(":", 1)[-1]
+                    n2 = c2["seats"][seat].split(":", 1)[-1]
+                    if n1 in m1 and n2 in m2 and (m1.index(n1) - m2.index(n2)) % g:
+                        raise ValueError(
+                            f"seed {seed}, {focal}: arm {c1['arm']!r} from {outs[c1['_run']]} "
+                            f"has {n1!r} and arm {c2['arm']!r} from {outs[c2['_run']]} has "
+                            f"{n2!r} in seat {seat!r}, a pairing no single run makes: the runs' "
+                            "seed lists start at different points of the counterpart rotation. "
+                            "Run these arms over the same seed list.")
+
+
+def build_report(*out_dirs: str | Path, margins: dict[str, float] | None = None,
+                 env: str | None = None) -> dict[str, Any]:
+    """`env`: the environment to use when a run's manifest names an import
+    path, which is never imported from the manifest itself (see `resolve_env`)."""
     margins = margins or {}
     runs, env_name = [], None
+    env_entry = envs.get(env, allow_import=True) if env is not None else None
+    run_entry: envs.EnvEntry | None = None
     cells: dict[tuple[int, str, str, int], dict[str, Any]] = {}
     scenario: dict[int, str] = {}
     decisions: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
@@ -183,10 +257,13 @@ def build_report(*out_dirs: str | Path,
             prior = arm_defs.setdefault(arm, (definition, str(out)))
             if prior[0] != definition:
                 raise ValueError(f"arm {arm!r} is defined differently in {prior[1]} and {out}")
-        if env_name not in (None, run["config"]["env"]):
+        entry = resolve_env(run["config"]["env"], out, env, env_entry)
+        if run_entry not in (None, entry):
             raise ValueError("runs use different environments")
-        env_name = run["config"]["env"]
-        entry = envs.get(env_name)
+        env_name, run_entry = env_name or run["config"]["env"], entry
+        own_name = entry.env().name
+        for k in spend:  # usage of attempts dropped when the run was resumed
+            spend[k] += (run.get("prior_usage") or {}).get(k, 0)
         for c in rows:
             status_counts[c["status"]] += 1
             for k in spend:
@@ -195,6 +272,9 @@ def build_report(*out_dirs: str | Path,
                 continue
             lines = read_trace(out / c["trace"])
             header = lines[0]
+            if header["env"]["name"] != own_name:
+                raise ValueError(f"{out / c['trace']} is a trace of env {header['env']['name']!r}, "
+                                 f"not {own_name!r}")
             fingerprint = digest([header["instance"], header["spec"]["config"],
                                   header["spec"]["focal_seat"]])
             if scenario.setdefault(c["seed"], fingerprint) != fingerprint:
@@ -202,7 +282,7 @@ def build_report(*out_dirs: str | Path,
             key = (c["seed"], c["focal"], c["arm"], c["replicate"])
             if key in cells:
                 raise ValueError(f"{key} appears in more than one run")
-            cells[key] = {**c, "metrics": entry.episode_metrics(lines)}
+            cells[key] = {**c, "metrics": entry.episode_metrics(lines), "_run": len(runs) - 1}
             if c["replicate"] == 0:
                 decisions[(c["focal"], c["arm"])].extend(entry.decision_rows(lines))
                 if entry.counterpart_opening is not None:
@@ -210,7 +290,12 @@ def build_report(*out_dirs: str | Path,
                     if text:
                         openings[(c["focal"], c["arm"])][c["seed"]] = text
     _check_panels(panels)
-    entry = envs.get(env_name)
+    _check_rotation(cells, runs, [str(o) for o in out_dirs])
+    entry = run_entry
+    unknown = sorted(set(margins) - set(entry.metric_kinds))
+    if unknown:
+        raise ValueError(f"margins name unknown metric(s) {unknown}; known: "
+                         f"{', '.join(entry.metric_kinds)}")
     arms = _arm_order(runs, {k[2] for k in cells})
     focals = list(dict.fromkeys(f for run in runs for f in run["config"]["focal_models"]))
     seeds = sorted({k[0] for k in cells})
@@ -249,10 +334,12 @@ def build_report(*out_dirs: str | Path,
                     fl = [f for f in (floors[focal][a][name], floors[focal][b][name])
                           if f is not None]
                     floor = max(fl) if fl else None
-                    clears = bool(deltas) and not (lo <= 0 <= hi) and (
+                    # Fewer than two pairs give a NaN interval, which clears nothing.
+                    has_ci = not (math.isnan(lo) or math.isnan(hi))
+                    clears = has_ci and not (lo <= 0 <= hi) and (
                         floor is None or abs(delta) > floor)
                     margin = margins.get(name)
-                    if margin is not None and bool(deltas) and -margin <= lo90 and hi90 <= margin:
+                    if margin is not None and has_ci and -margin <= lo90 and hi90 <= margin:
                         verdict = "equivalent"
                     elif clears:
                         verdict = "different"
@@ -276,6 +363,9 @@ def build_report(*out_dirs: str | Path,
                     row[f"sd_{name}"] = statistics.stdev(vals) if len(vals) > 1 else None
             texts = list(openings[(focal, arm)].values())
             row["opening_distinct2"] = distinct2(texts) if texts else None
+            # A seed whose counterpart opened without a message (e.g. a strike)
+            # has no opening, so this n can be below the number of episodes.
+            row["n_openings"] = len(texts)
             per_arm[arm] = row
         comps: dict[str, dict[str, Any]] = {}
         for i, a in enumerate(arms):
@@ -316,6 +406,12 @@ def _fmt(v: Any) -> str:
     return f"{v:+.3f}" if isinstance(v, float) else str(v)
 
 
+def _fmt_p(p: float) -> str:
+    if p != p:
+        return "p=-"
+    return "p<0.001" if p < 0.001 else f"p={p:.3f}"
+
+
 def render(report: dict[str, Any]) -> str:
     arms = report["arms"]
     out = [f"# {' + '.join(report['run_ids'])} ({report['env']})", "",
@@ -323,6 +419,9 @@ def render(report: dict[str, Any]) -> str:
            "Spend: {input_tokens:,} input + {output_tokens:,} output tokens, "
            "${cost_usd:.2f} reported by provider".format(**report["spend"]), ""]
     for focal, by_arm in report["means"].items():
+        if not arms:
+            out += [f"## {focal}", "", "No completed episodes to report.", ""]
+            continue
         n_ep = report.get("episodes", {}).get(focal, {})
         out += [f"## {focal}", "", "Means (replicate 0; episodes per arm: "
                 + ", ".join(f"{a}={n_ep.get(a, '?')}" for a in arms)
@@ -346,7 +445,7 @@ def render(report: dict[str, Any]) -> str:
                            f"| [{_fmt(lo90)}, {_fmt(hi90)}] | {_fmt(m['margin'])} "
                            f"| {_fmt(m['noise_floor'])} | {m['n_pairs']} | {m['verdict']} |")
         div = report["diversity"].get(focal)
-        if div:
+        if div and div["per_arm"]:
             cols = list(next(iter(div["per_arm"].values())))
             out += ["", "Diversity (spread across seeds; opening-message variety):", "",
                     "| arm | " + " | ".join(cols) + " |", "|---|" + "---|" * len(cols)]
@@ -354,14 +453,16 @@ def render(report: dict[str, Any]) -> str:
                 out.append(f"| {arm} | " + " | ".join(_fmt(row[c]) for c in cols) + " |")
             for title, comp in div["comparisons"].items():
                 out.append(f"\n{title}: " + "; ".join(
-                    f"{k} {_fmt(v['delta'])} " + (f"(p={v['p']:.3f})" if "p" in v else
+                    f"{k} {_fmt(v['delta'])} " + (f"({_fmt_p(v['p'])}, n={v['n']})" if "p" in v else
                                                   f"[{_fmt(v['ci'][0])}, {_fmt(v['ci'][1])}]")
                     for k, v in comp.items() if v["n"]))
         table = report["acceptance_by_offer_quality"].get(focal, {})
         if any(table.values()):
-            out += ["", ("Acceptance by offer quality (offers the focal seat could legally "
-                     "accept; declines included):"), "",
-                    "| arm | bin | offers | accepted | rate |", "|---|---|---|---|---|"]
+            out += ["", ("Acceptance by offer quality (every focal decision taken facing an "
+                         "offer it could legally accept, declines included; an offer that "
+                         "stands for several decisions counts at each):"), "",
+                    "| arm | bin | decisions facing an offer | accepted | rate |",
+                    "|---|---|---|---|---|"]
             for arm in arms:
                 for b, v in sorted(table.get(arm, {}).items()):
                     out.append(f"| {arm} | {b} | {v['n']} | {v['accepted']} "
@@ -384,7 +485,8 @@ def cohen_kappa(a: list[str], b: list[str]) -> float:
 
 
 def export_claims(out_dir: str | Path, prefix: str | Path, sample: int = 200,
-                  seed: int = 0, exclude: set[str] | None = None) -> tuple[Path, Path, int]:
+                  seed: int = 0, exclude: set[str] | None = None,
+                  env: str | None = None) -> tuple[Path, Path, int]:
     """Write `<prefix>.blind.csv` (sentences and true limits, empty
     `human_label`, no rule output) and `<prefix>.key.csv` (the rules' labels,
     plus each label's total count in the run so agreement can be reweighted).
@@ -396,7 +498,7 @@ def export_claims(out_dir: str | Path, prefix: str | Path, sample: int = 200,
     import csv
     out = Path(out_dir)
     run, cells = load_manifest(out)
-    entry = envs.get(run["config"]["env"])
+    entry = resolve_env(run["config"]["env"], out, env)
     if entry.claim_rows is None:
         raise ValueError(f"env {run['config']['env']!r} has no claim classifier")
     rows = [r for c in cells if c["status"] == "done"
@@ -420,12 +522,12 @@ def export_claims(out_dir: str | Path, prefix: str | Path, sample: int = 200,
     prefix = Path(prefix)
     prefix.parent.mkdir(parents=True, exist_ok=True)
     blind, key = prefix.with_suffix(".blind.csv"), prefix.with_suffix(".key.csv")
-    with blind.open("w", newline="") as f:
+    with blind.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["id", "limit_discount_pct", "limit_credit_usd", "sentence", "human_label"])
         for r in take:
             w.writerow([r["id"], r["limit_discount_pct"], r["limit_credit_usd"], r["sentence"], ""])
-    with key.open("w", newline="") as f:
+    with key.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["id", "auto_label", "arm", "label_model", "label_total_in_run"])
         for r in take:
@@ -462,13 +564,13 @@ def _weighted_bluff_agreement(pairs: list[tuple[str, str]],
 
 def claims_kappa(blind_csv: str | Path, key_csv: str | Path) -> dict[str, Any]:
     import csv
-    with Path(key_csv).open() as f:
+    with Path(key_csv).open(encoding="utf-8") as f:
         key_rows = list(csv.DictReader(f))
     auto = {r["id"]: r["auto_label"] for r in key_rows}
     totals = {r["auto_label"]: int(r["label_total_in_run"]) for r in key_rows
               if r.get("label_total_in_run")}
     pairs, invalid = [], []
-    with Path(blind_csv).open() as f:
+    with Path(blind_csv).open(encoding="utf-8") as f:
         for r in csv.DictReader(f):
             human = (r.get("human_label") or "").strip().lower()
             if not human:

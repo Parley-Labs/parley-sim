@@ -38,7 +38,7 @@ Each `lineup` entry:
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `name` | required | How the config refers to it |
-| `provider` | required | `anthropic`, `openai`, `openai_compat`, `scripted` or `harness` |
+| `provider` | required | `anthropic`, `openai`, `openai_compat`, `scripted`, or `harness` (NeMo Gym adapter only; refused in a `matched` config) |
 | `model` | required | The provider's model ID (for `scripted`, a policy name) |
 | `base_url` | none | For `openai_compat`: the gateway, e.g. `https://openrouter.ai/api/v1` |
 | `api_key_env` | per provider | Environment variable holding the key |
@@ -120,18 +120,25 @@ For a model that might not support structured outputs everywhere, use
   the decision's usage, and so in the token cap. Timed-out and failed calls
   are recorded as attempts without usage.
 - **Token cap.** With `max_total_tokens`, cells that would start after the
-  cap is reached are recorded as `skipped_budget`. Episodes already running
-  finish, so a run can overshoot by up to `concurrency` episodes. It caps
-  tokens, not money.
+  cap is reached are recorded as `skipped_budget`. The count includes tokens
+  spent in earlier invocations of the same run, errored cells included (kept
+  in the manifest's `prior_usage`), so re-running cannot spend the cap again.
+  Episodes already running finish, so a run can overshoot by up to
+  `concurrency` episodes. It caps tokens, not money.
+- **Exit codes.** `matched` exits 0 when every cell is done, 1 when any cell
+  errored (each distinct error is printed with its count), and 2 when the
+  run halted.
 - **Refusals are strikes, not substitutions.** No client silently falls back
   to another model, which would contaminate the evaluation.
 
 ## Resuming
 
 Run the same command again. A cell is skipped only if the manifest says it is
-done and its trace has a footer; anything else is run again. parley-sim
-refuses to resume into a directory created from a different config, so
-changing the experiment means a new `--out`.
+done and its trace has a footer; anything else is run again, and the traces
+of cells that are not done are deleted first. A torn last manifest line (a
+crash mid-write) is skipped with a warning and healed. parley-sim refuses to
+resume into a directory created from a different config, so changing the
+experiment means a new `--out`.
 
 ## Output directory
 

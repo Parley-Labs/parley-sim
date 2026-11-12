@@ -35,11 +35,12 @@ from parley_sim.drivers.models import (
     build_client,
 )
 from parley_sim.runtime.episode import EpisodeSpec
-from parley_sim.trace import JsonlWriter, is_complete, iter_trace
+from parley_sim.trace import JsonlWriter, is_complete, read_jsonl_tolerant
 
 ClientFactory = Callable[[ModelSpec], ProviderClient]
 _ID = r"^[A-Za-z0-9._-]+$"
 _OPERATIONAL = ("concurrency", "max_total_tokens", "max_refusals")
+_USAGE_KEYS = ("input_tokens", "output_tokens", "cost_usd")
 
 
 def parse_seeds(spec: str) -> range:
@@ -92,10 +93,14 @@ class MatchedConfig(BaseModel):
 
     @model_validator(mode="after")
     def _references(self) -> MatchedConfig:
-        entry = envs.get(self.env)
+        entry = envs.get(self.env, allow_import=True)  # the user's own config may name a path
         names = [m.name for m in self.lineup]
         if len(set(names)) != len(names):
             raise ValueError("lineup names must be unique")
+        harness = [m.name for m in self.lineup if m.provider == "harness"]
+        if harness:
+            raise ValueError(f"lineup entries {harness} use provider 'harness', which only works "
+                             "under the NeMo Gym adapter, not in a matched run")
         model_refs = self.focal_models + self.adaptive_counterparts + [
             n for arm in self.extra_arms.values() for n in arm]
         missing = [n for n in model_refs if n not in names]
@@ -148,7 +153,7 @@ class Cell(BaseModel):
 
 
 def load_config(path: str | Path) -> MatchedConfig:
-    return MatchedConfig(**yaml.safe_load(Path(path).read_text()))
+    return MatchedConfig(**yaml.safe_load(Path(path).read_text(encoding="utf-8")))
 
 
 def config_hash(cfg: MatchedConfig) -> str:
@@ -164,7 +169,7 @@ def build_grid(cfg: MatchedConfig) -> list[Cell]:
     """Counterparts rotate across seeds (seed index i, non-focal seat j gets
     names[(i + j) % len(names)]), so every scripted persona and every adaptive
     counterpart is covered even with one non-focal seat."""
-    entry = envs.get(cfg.env)
+    entry = envs.get(cfg.env, allow_import=True)
     env = entry.env()
     focal_seat = cfg.focal_seat or entry.focal_seat
     cells: list[Cell] = []
@@ -193,10 +198,16 @@ def build_grid(cfg: MatchedConfig) -> list[Cell]:
 
 def _usage(trace: Path) -> dict[str, float]:
     total: dict[str, float] = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
-    for line in iter_trace(trace):
-        usage = ((line.get("raw") or {}).get("usage") or {}) if line["type"] == "decision" else {}
-        for k in total:
-            total[k] += usage.get(k, 0)
+    with trace.open(encoding="utf-8", errors="replace") as f:
+        for text in f:
+            try:
+                line = json.loads(text)
+            except ValueError:
+                continue  # a cut last line still has its earlier decisions' usage
+            usage = ((line.get("raw") or {}).get("usage") or {}) \
+                if line.get("type") == "decision" else {}
+            for k in total:
+                total[k] += usage.get(k, 0)
     return total
 
 
@@ -206,7 +217,7 @@ def _tokens(usage: dict[str, float]) -> int:
 
 def _write_atomic(path: Path, rows: list[dict[str, Any]]) -> None:
     tmp = path.with_name(path.name + ".tmp")
-    with tmp.open("w") as f:
+    with tmp.open("w", encoding="utf-8") as f:
         for row in rows:
             f.write(json.dumps(row, sort_keys=True) + "\n")
         f.flush()
@@ -234,26 +245,43 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
         run_row["persona_digest"] = digest(personas)
 
     done: dict[str, dict[str, Any]] = {}
+    # Usage of cell attempts the resume rewrite drops (errored, skipped, cut),
+    # carried in the run row across resumes so the token cap is per run.
+    prior_usage = dict.fromkeys(_USAGE_KEYS, 0)
     if manifest.exists():
-        rows = list(iter_trace(manifest))
+        rows = read_jsonl_tolerant(manifest)  # a torn last line is healed by the rewrite
         prior = next((r for r in rows if r["type"] == "run"), None)
         if prior is None or prior["config_hash"] != chash:
             raise RuntimeError(f"{manifest} was built from a different config; use a new --out")
         if prior.get("persona_digest") not in (None, run_row.get("persona_digest")):
             raise RuntimeError(f"{manifest} was built from a different persona panel; "
                                "use a new --out")
-        for r in rows:
-            if r["type"] == "cell" and r["status"] == "done" and is_complete(out / r["trace"]):
+        for k in _USAGE_KEYS:
+            prior_usage[k] += (prior.get("prior_usage") or {}).get(k, 0)
+        cell_rows = [r for r in rows if r["type"] == "cell"]
+        for r in cell_rows:
+            if r["status"] == "done" and r.get("trace") and is_complete(out / r["trace"]):
                 done[r["cell_key"]] = r
+        for r in cell_rows:
+            if done.get(r["cell_key"]) is not r:
+                for k in _USAGE_KEYS:
+                    prior_usage[k] += (r.get("usage") or {}).get(k, 0)
+    if any(prior_usage.values()):
+        run_row["prior_usage"] = prior_usage
     _write_atomic(manifest, [run_row, *done.values()])
+    # A cell that is not done keeps no trace: if it is skipped this time
+    # (halted, over budget), an earlier attempt's file must not linger.
+    for cell in cells:
+        if cell.cell_key not in done:
+            (out / "traces" / f"{cell.cell_key}.jsonl").unlink(missing_ok=True)
 
-    entry = envs.get(cfg.env)
+    entry = envs.get(cfg.env, allow_import=True)
     lineup = {m.name: m for m in cfg.lineup}
     breaker = Breaker(cfg.max_refusals)
-    spent = {"tokens": sum(_tokens(r["usage"]) for r in done.values())}
+    spent = {"tokens": sum(_tokens(r["usage"]) for r in done.values()) + _tokens(prior_usage)}
     lock = asyncio.Lock()
     sem = asyncio.Semaphore(cfg.concurrency)
-    fh = manifest.open("a")
+    fh = manifest.open("a", encoding="utf-8")
 
     def append(row: dict[str, Any]) -> None:
         fh.write(json.dumps(row, sort_keys=True) + "\n")
@@ -300,6 +328,9 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
                     await run_episode(entry, spec, agents, sink=writer)
             except Exception as exc:  # one bad cell never takes down the grid
                 status, error = "errored", repr(exc)
+                if getattr(exc, "status_code", None) in (401, 403):
+                    # e.g. building a client was refused: as fatal as a refused call
+                    breaker.fatal(repr(exc))
             if trace.exists() and trace.stat().st_size == 0:
                 trace.unlink()  # the episode failed before writing its header
             usage = _usage(trace) if trace.exists() else {"input_tokens": 0, "output_tokens": 0}

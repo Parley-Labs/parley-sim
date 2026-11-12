@@ -59,66 +59,129 @@ parley_sim:
   environment_servers:
     parley_sim:
       entrypoint: app.py
-      focal_agent: {type: responses_api_agents, name: ???}
-      counterpart_agents:              # used as "model:<name>" seats
-        peer: {type: responses_api_agents, name: ???}
+      agent_server:        # the focal agent
+        type: responses_api_agents
+        name: ???
+      peer:                # a counterpart, serving "model:peer" seats
+        type: responses_api_agents
+        name: ???
       reward_metric: focal_surplus_share
       max_refusals: 3
       cleanup_timeout_seconds: 180
       default_episode_timeout_seconds: 3600
+
+environment_server_routes:   # taskset -> environment server
+  parley_sim: parley_sim
 ```
 
-Each task row is one episode:
+| Server key | Meaning |
+| --- | --- |
+| `agent_server` | The focal agent: the one under training or evaluation. Gym attributes this server's results to `agent_server`, so token-capture finalisation follows the focal agent's `token_id_capture` setting. |
+| `<name>` | Any other key holding a `responses_api_agents` reference is a counterpart, used by `model:<name>` seats. Any other unknown key is an error. |
+| `reward_metric` | The environment metric used as the reward (default `focal_surplus_share`) |
+| `max_refusals` | Refusals in one episode before it halts (default 3) |
+| `focal_conversation` | Play the focal seat as one growing conversation (default `true`; see [Training data](#training-data)) |
+| `allowed_env_paths` | Import paths task rows may name as `env` (default none) |
+| `actor_call_timeout_seconds` | Per-call timeout for agent requests (default 300) |
+| `responses_create_params` | Merged into every Responses API request, e.g. `{reasoning: {effort: low}}` |
+
+Counterparts are top-level keys, not a nested map, because Gym treats only
+top-level `type: responses_api_agents` fields as agent references. That way
+Gym checks each one names a defined agent and does not generate a legacy relay
+server for it, so the config loads with
+`error_on_agent_without_environment_server: true`. An agent may serve as both
+`agent_server` and a counterpart (self-play); rows routed by taskset, as below,
+are unaffected.
+
+Gym's collector sends an episode to an environment server only for a
+materialized row: `task_id` names a taskset, `task_input` is the parley-sim
+task, and `environment_server_routes` maps the taskset to this server. Each
+row is one episode (one line of the JSONL; wrapped here):
 
 ```json
-{"seed": 1000, "seats": {"agent": "model:focal", "customer": "policy:hardliner"},
- "arm": "soc", "pair_key": "run-1000-focal"}
+{"task_id": {"taskset": "parley_sim", "task_id": "s1000-hardliner"},
+ "task_input": {"seed": 1000, "seats": {"agent": "model:focal", "customer": "policy:hardliner"},
+                "arm": "soc", "pair_key": "run-1000-focal"}}
 ```
 
-| Task field | Meaning |
+A flat row (the `task_input` alone) is not an episode request and gets a
+422: Gym builds the request's episode id, which carries the token-capture
+key, only for a materialized row.
+
+| `task_input` field | Meaning |
 | --- | --- |
 | `seed` | Scenario seed |
-| `seats` | Seat map: `model:focal` for the agent under training, `policy:<name>` or `model:<counterpart>` for the rest |
+| `seats` | Seat map: `model:<any name>` on the focal seat for the agent under training, `policy:<name>` or `model:<counterpart>` for the rest |
 | `env`, `env_config`, `focal_seat` | As in a run config |
 | `arm`, `pair_key`, `cell_key`, `replicate` | Labels recorded in the trace, so Gym rollouts can be paired and reported like a parley-sim run |
 
 To compare arms, write task rows for the same seeds with each kind of
 counterpart, and give the matching rows the same `pair_key`.
 
+Task rows can name only built-in, registered or entry-point environments. An
+import path (`my_pkg.envs:ENTRY`) in a task row is refused unless the server
+config lists it under `allowed_env_paths`, because loading one imports and
+runs code named by the task data. These fail at seeding, as terminal
+failures, before any agent is called: an unknown environment, reward metric,
+counterpart or `focal_seat`, and an allowed import path that does not load
+(missing module or attribute, or not an `EnvEntry`).
+
+The reward metric must be defined for the episode. Some metrics are undefined
+for some episodes (a share of an offer that was never made); such an episode
+fails at the `verification` stage as a terminal failure with
+`failure_kind: parley_sim:reward_undefined`, rather than being scored 0.
+
+If the adapter cannot process a reply the agent did return, the episode fails
+as a terminal `agent` failure instead of being scored on fallback moves.
+
 ### Training data
 
 The focal seat plays one growing conversation (`focal_conversation`, on by
 default): each request resends the earlier turns, with the agent's own output
-items exactly as it returned them, then adds what the counterpart did since.
-Each prompt therefore extends the previous one at the message level. Token
+items exactly as it returned them (unset fields stay unset, as Gym's
+SimpleAgent replays them), then adds what the counterpart did since. Each
+prompt therefore extends the previous one at the message level. Token
 continuity, which NeMo Gym needs to treat an episode as one continuous
 training sample, also requires the agent's model server to tokenize the
 resent output items into the same token ids it sampled. The adapter does not
 check that; each output item's `prompt_token_ids` let a trainer verify it.
 
+A refused call, or an empty or whitespace-only reply, never enters the
+conversation. A refusal is a strike. An empty reply is retried once with a
+correction appended to the same prompt, as in a local run. Both are still
+listed in `focal_calls`.
+
 The episode result carries:
 
 - `response`: a Gym-native Responses object whose `output` is every focal
-  reply in order, with whatever token ids and log probabilities the agent
-  returned. Counterpart replies are never in it. Gym's rollout collector
-  stores it as the rollout's `response`, so `rollout_carries_token_ids` sees
-  the agent's sampled tokens and token capture leaves them as they are.
-- `focal_calls`: every focal request and full response, for audit.
+  reply in the conversation, in order, with whatever token ids and log
+  probabilities the agent returned. Counterpart replies and refused or empty
+  calls are never in it. Its envelope, `id` included, is the last such
+  reply's, so Gym's token-capture finaliser can match it to the captured
+  call. Gym's rollout collector stores it as the rollout's `response`, so
+  `rollout_carries_token_ids` sees the agent's sampled tokens and token
+  capture leaves them as they are.
+- `focal_calls`: every focal request and full response, for audit, each
+  flagged `refused`, `empty` and `in_conversation`. Gym's own `_ng_*` keys,
+  such as `_ng_trajectory` with observability on, are dropped from both.
+
+A reply cut off by the agent's output cap (`status: incomplete`,
+`incomplete_details.reason: max_output_tokens`) that does not parse is
+recorded as a `truncated` strike, without a repair retry.
 
 With `focal_conversation: false` the focal seat gets a fresh prompt each turn,
-like a default local run, and the result carries no training payload. To
-evaluate locally with the prompt shape used in training, set
-`conversation: true` on the focal model in the run config.
+like a default local run, the result carries no training payload, and the
+focal calls do not use the token-capture route. This mode is for evaluation:
+set `token_id_capture: false` on the focal agent for it. Gym's collector
+finalises token capture for every rollout attributed to an agent with capture
+on; when it rebuilds responses from captured tokens, it would mask each such
+rollout as having no recorded tokens, which counts against
+`token_id_capture.max_mask_fraction`. To evaluate locally
+with the prompt shape used in training, set `conversation: true` on the focal
+model in the run config.
 
 Tested against the pinned nemo-gym 0.7 code path from episode to collected
 rollout record; not yet with a NeMo-RL training run.
-
-Task rows can name only built-in, registered or entry-point environments. An
-import path (`my_pkg.envs:ENTRY`) in a task row is refused unless the server
-config lists it under `allowed_env_paths`, because loading one imports and
-runs code named by the task data. The reward metric is checked against the
-environment's metrics, and a task with an unknown one fails at seeding rather
-than scoring 0.
 
 ## OpenEnv
 
