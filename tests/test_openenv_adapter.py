@@ -1,7 +1,7 @@
 import asyncio
 import json
-import time
 import logging
+import time
 
 import pytest
 

@@ -183,7 +183,7 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
         self._closed = False
         self._episode: Episode | None = None
         self._pending: DecisionRequest | None = None
-        self.entry = envs.get(env)
+        self.entry = envs.get(env, allow_import=True)  # the operator's own setting
         self.focal = focal_seat or self.entry.focal_seat
         if seats.get(self.focal) != CLIENT:
             raise ValueError(f"seat {self.focal!r} must be labelled {CLIENT!r}")

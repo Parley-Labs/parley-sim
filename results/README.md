@@ -100,7 +100,7 @@ uv run parley-sim verify results/family-sd4/traces/*.jsonl
 
 The published reports were produced by the code at the time of each run.
 Recomputing with the current code matches them for every comparison that
-doesn't involve the withheld arm, with four known differences:
+doesn't involve the withheld arm, with these known differences:
 
 - the experimental claim metrics (`limit_claim`, `understated_limit`) changed
   because the claim rules were fixed after the run, and are now labelled
@@ -112,4 +112,11 @@ doesn't involve the withheld arm, with four known differences:
   they leave out the withheld arm. `equiv-sd3` recomputes to `Cells: done=240`
   and 2,340,767 input + 273,647 output tokens (published: 400 cells,
   5,477,709 + 465,346); the joint report to `Cells: done=400` and 3,993,323 +
-  1,048,026 (published: 560 cells, 7,130,265 + 1,239,725).
+  1,048,026 (published: 560 cells, 7,130,265 + 1,239,725);
+- the report's layout changed: the diversity table gains an `n_openings`
+  column and each comparison its `n`, the acceptance column reads "decisions
+  facing an offer", and p-values below 0.001 print as `p<0.001`;
+- an off-by-one in the 90% interval's lower order statistic was fixed. No
+  printed `equiv-sd3` figure changes; in the joint report three 90% lower
+  bounds move by 0.001 (`cp_first_offer_share` +0.087 to +0.088 and -0.148
+  to -0.147, `joint_efficiency` -0.093 to -0.092). No verdict changes.

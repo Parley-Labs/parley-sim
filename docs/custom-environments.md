@@ -124,13 +124,17 @@ behaved differently" from "the counterpart behaved differently".
 Three ways, from quickest to most permanent:
 
 1. **Import path in the config:** `env: my_pkg.envs:ENTRY`. The module must
-   be importable (installed, or on `PYTHONPATH`). To replay its traces, pass
-   the same path: `parley-sim verify TRACE --env my_pkg.envs:ENTRY`.
+   be importable (installed, or on `PYTHONPATH`). parley-sim imports a path
+   only when you give it, never when it is read from a trace or manifest,
+   so to report on or replay such a run in a new process pass the same path:
+   `parley-sim report DIR --env my_pkg.envs:ENTRY`,
+   `parley-sim verify TRACE --env my_pkg.envs:ENTRY`. An import path can't
+   reuse the name of a built-in or registered environment.
 2. **Register in code:** `parley_sim.envs.register("my_env", ENTRY)`, then
    `env: my_env`. Useful in notebooks and tests.
 3. **Entry point in your package**, so `env: my_env` works everywhere. Name
-   the entry point after your environment's `name` attribute and `verify`
-   needs no flag either:
+   the entry point after your environment's `name` attribute and `report`
+   and `verify` need no flag either:
 
    ```toml
    [project.entry-points."parley_sim.envs"]

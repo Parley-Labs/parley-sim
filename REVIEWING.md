@@ -58,8 +58,10 @@ needs NVIDIA's persona dataset (see `docs/personas.md`).
    scenario-fingerprint check in `build_report`.
 2. **Traces are exactly replayable.**
    `uv run parley-sim verify results/*/traces/*.jsonl` replays all 400
-   published traces and checks every state hash, the ground truth and the
-   outcomes.
+   published traces and checks every logged field against the replay: who
+   acts, each observation and decision context, the moves (re-running the
+   scripted policies), every event and state hash, the ground truth, the
+   outcomes, and that a "complete" game really ended.
 3. **The published reports are reproducible from the published data.**
    `uv run parley-sim report results/equiv-sd3 --margins focal_surplus_share=0.08,turns=0.8`
    and compare with `results/equiv-sd3/report.md`. Known, documented

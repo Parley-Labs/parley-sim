@@ -163,10 +163,14 @@ show the method, and to be replaced by yours.
 | Command | Does |
 | --- | --- |
 | `parley-sim smoke` | Offline end-to-end check, no keys |
-| `parley-sim matched CONFIG --out DIR` | Run (or resume) a matched grid |
-| `parley-sim report DIR... [--margins k=v,...] [--json]` | Paired report across one or more run directories |
-| `parley-sim verify TRACE... [--env NAME]` | Replay traces through the environment |
-| `parley-sim claims DIR --prefix P` | Export a blind sample of agent claims for labelling |
+| `parley-sim matched CONFIG --out DIR` | Run (or resume) a matched grid; exits 1 if any cell errored, 2 if the run halted |
+| `parley-sim report DIR... [--margins k=v,...] [--json] [--env NAME]` | Paired report across one or more run directories |
+| `parley-sim verify TRACE... [--env NAME]` | Replay traces through the environment and check every logged field |
+| `parley-sim claims DIR --prefix P [--env NAME]` | Export a blind sample of agent claims for labelling |
+
+`--env` is needed only for an environment loaded by import path
+(`my_pkg.envs:ENTRY`): parley-sim never imports a module named inside a
+trace or run directory, so a downloaded trace can't run code.
 | `parley-sim kappa BLIND KEY` | Agreement between the claim rules and human labels |
 
 ## License
