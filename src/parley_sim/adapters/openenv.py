@@ -138,8 +138,8 @@ def _project(value: Any, schema: Any) -> Any:
     properties, plus undeclared ones when `additionalProperties` permits them."""
     if not isinstance(schema, dict):
         return value
-    props = schema.get("properties")
-    if isinstance(value, dict) and isinstance(props, dict):
+    if isinstance(value, dict) and ("properties" in schema or "additionalProperties" in schema):
+        props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
         extra = schema.get("additionalProperties", True)
         return {k: _project(v, props[k] if k in props else extra)
                 for k, v in value.items() if k in props or extra is not False}
