@@ -492,8 +492,10 @@ def create_parley_app(*, max_concurrent_envs: int = 8, session_timeout_s: float 
     outside the session limit. The Gradio web interface is never mounted,
     whatever ENABLE_WEB_INTERFACE says, because it shares one environment
     between all its users. Idle sessions are closed after `session_timeout_s`,
-    which must cover a whole reset or step: two attempts of every seated model
-    counterpart's timeout_s. The server has no authentication of its own."""
+    which must cover a whole reset or step. Startup checks a lower bound, two
+    attempts of every seated model counterpart's timeout_s; an environment
+    where a seat acts several times in a row needs more. The server has no
+    authentication of its own."""
     probe = ParleySimEnvironment(**environment_kwargs)  # validate the configuration at startup
     try:
         needed = probe.max_turn_s
