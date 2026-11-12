@@ -421,3 +421,9 @@ def test_schema_projection_keeps_keys_the_schema_allows():
     assert _project({"a": 1, "b": 2}, closed) == {"a": 1}
     assert _project({"a": 1, "b": 2}, open_) == {"a": 1, "b": 2}
     assert _project({"a": 1, "b": {"x": 1, "y": 2}}, typed) == {"a": 1, "b": {"x": 1}}
+    # additionalProperties without properties
+    assert _project({"a": 1}, {"type": "object", "additionalProperties": False}) == {}
+    assert _project({"a": {"x": 1, "y": 2}},
+                    {"type": "object", "additionalProperties": typed["additionalProperties"]}) \
+        == {"a": {"x": 1}}
+    assert _project({"a": 1}, {"type": "object"}) == {"a": 1}
