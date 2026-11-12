@@ -115,8 +115,18 @@ class ParleySimTaskInput(BaseModel):
     replicate: int = 0
 
 
-# Output item types the agent generated (prompt echoes are messages from other roles).
-_SAMPLED_TYPES = frozenset({"message", "reasoning", "function_call"})
+# Output item types the agent generated. Messages count only from the assistant:
+# agents may echo prompt messages (user, system) into their output, which carry
+# no generated token ids and are not part of the sample.
+_SAMPLED_TYPES = frozenset({"reasoning", "function_call"})
+
+
+def _is_sampled(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    if item.get("type") == "message":
+        return item.get("role") == "assistant"
+    return item.get("type") in _SAMPLED_TYPES
 
 
 class ParleySimEpisodeResult(BaseModel):
@@ -296,7 +306,7 @@ class _AgentSessionClient:
         don't. Gym keeps any inline ids as they are and fills in none, so such a
         sample would train on part of the agent's tokens; it is masked instead."""
         sampled = [item for _, output in self.exchanges for item in output
-                   if isinstance(item, dict) and item.get("type") in _SAMPLED_TYPES]
+                   if _is_sampled(item)]
         has = [bool(item.get("generation_token_ids")) for item in sampled]
         return any(has) and not all(has)
 
