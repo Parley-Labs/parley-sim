@@ -18,6 +18,11 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/Parley-Labs/parley-sim"
+Documentation = "https://github.com/Parley-Labs/parley-sim/tree/main/docs"
+Issues = "https://github.com/Parley-Labs/parley-sim/issues"
+
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.40"]
 openai = ["openai>=1.50"]

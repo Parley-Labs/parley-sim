@@ -45,9 +45,10 @@ Full numbers, configs and reports are in [`results/`](results/README.md).
 
 ## Install
 
-From a checkout, with [uv](https://docs.astral.sh/uv/):
+parley-sim is not on PyPI yet. From a checkout, with [uv](https://docs.astral.sh/uv/):
 
 ```bash
+git clone https://github.com/Parley-Labs/parley-sim && cd parley-sim
 uv sync                         # core: runner, report, support_desk env
 uv sync --extra openai          # OpenAI-compatible APIs (OpenAI, OpenRouter, vLLM, NIM)
 uv sync --extra anthropic       # Anthropic API
