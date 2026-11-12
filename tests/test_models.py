@@ -343,3 +343,15 @@ def test_persona_wrapper_without_base_update_resends_full_prompts(fake_usersim):
     client = _two_turns(text)
     assert client.users == _two_turns(NoUpdate()).users
     assert "Conversation so far" in client.users[1]  # the full prompt again
+
+
+def test_anthropic_credit_balance_400_halts_the_run():
+    breaker = Breaker()
+    err = RuntimeError("Error code: 400 - {'type': 'invalid_request_error', 'message': "
+                       "'Your credit balance is too low to access the Anthropic API.'}")
+    err.status_code = 400
+    spec = ModelSpec(name="m", provider="openai_compat", model="x")
+    s = ModelSeat(spec, SupportDeskText(), FakeClient([err]), breaker)
+    with pytest.raises(ProviderHalted, match="credit balance"):
+        asyncio.run(s.decide(request()))
+    assert breaker.tripped is not None

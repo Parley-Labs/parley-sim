@@ -387,3 +387,25 @@ def test_only_allowlisted_routes_are_served_and_none_build_environments():
             ws.send_text(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
             ws.receive_text()
     assert len(made) == startup  # nothing above built an environment or a provider client
+
+
+class Rejects:
+    """A counterpart client whose provider rejects every request."""
+
+    _client = None
+
+    async def complete(self, **kw):
+        err = RuntimeError("Error code: 400 - model 'secret-org/peer-model' is not available")
+        err.status_code = 400
+        raise err
+
+
+@pytest.mark.parametrize("mode,leaks", [("never", False), ("after_done", True)])
+def test_a_failed_counterpart_turn_names_its_provider_only_when_traces_are_released(mode, leaks):
+    env = ParleySimEnvironment(seats={"agent": "client", "customer": "model:peer"},
+                               lineup=PEER["lineup"], release_trace=mode,
+                               client_factory=lambda spec: Rejects())
+    with pytest.raises(Exception) as info:
+        env.reset(seed=1)
+    assert ("secret-org/peer-model" in str(info.value)) is leaks
+    assert env.state.done

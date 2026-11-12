@@ -30,7 +30,7 @@ the same code and is the one that will be merged; #2 is never merged.
 ```bash
 git clone https://github.com/Parley-Labs/parley-sim && cd parley-sim
 uv sync --extra openai --extra anthropic --extra openenv
-uv run pytest -q                       # about 180 tests; 2 skip without the gym and usersim extras
+uv run pytest -q                       # about 270 tests; 2 skip without the gym and usersim extras
 uv run parley-sim smoke                # whole pipeline offline; prints "replay check: ok"
 PYTHONPATH=examples uv run parley-sim matched examples/haggle.yaml --out /tmp/haggle
 ```

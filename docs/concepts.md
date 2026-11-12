@@ -152,7 +152,7 @@ declines would bias any arm whose counterpart makes them often.
 When a model's output does not parse, proposes an illegal move, is cut off
 by `max_tokens`, times out, is refused by the provider, or fails with a
 provider error, the episode records a **strike** with the reason
-(`malformed_output`, `illegal_move`, `truncated`, `timeout`, `refusal`,
+(`malformed_output`, `illegal_action`, `truncated`, `timeout`, `refusal`,
 `exception`) and applies the environment's fallback move (a no-op in
 `support_desk`). A malformed or empty reply gets one retry first; a
 truncated one does not, since the same cap would cut it off again.

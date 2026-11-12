@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from parley_sim.cli import smoke_config
-from parley_sim.matched import MatchedConfig, build_grid, run_matched
+from parley_sim.matched import MatchedConfig, build_grid, config_hash, run_matched
 from parley_sim.metrics import build_report, load_manifest
 
 
@@ -536,3 +536,32 @@ def test_resume_refuses_finished_persona_cells_with_no_recorded_panel(tmp_path, 
     m.write_text("".join(_json.dumps(r) + "\n" for r in rows))
     with pytest.raises(RuntimeError, match="did not record"):
         asyncio.run(run_matched(config, tmp_path / "run"))
+
+
+class SpendsTokens:
+    async def complete(self, *, system, user, schema, **kw):
+        reply = {"message": "hm", "move": {"type": "none"}, "explanation": "r"}
+        return json.dumps(reply), {"usage": {"input_tokens": 1000, "output_tokens": 0}}
+
+
+def test_cli_matched_exits_1_when_cells_are_skipped_at_the_token_cap(tmp_path, monkeypatch, capsys):
+    rc = _cli_matched(tmp_path, monkeypatch, api_cfg(concurrency=1, max_total_tokens=1500),
+                      lambda spec: SpendsTokens())
+    out = capsys.readouterr().out
+    assert rc == 1 and "the token cap (max_total_tokens) was reached" in out
+
+
+def test_resume_counts_tokens_of_cells_cut_off_mid_episode(tmp_path):
+    config = api_cfg(concurrency=1)
+    key = next(c.cell_key for c in build_grid(config) if c.arm == "aoc")
+    traces = tmp_path / "traces"
+    traces.mkdir(parents=True)
+    # A trace left by an interrupted cell: no manifest row, no footer.
+    (traces / f"{key}.jsonl").write_text(json.dumps(
+        {"type": "decision", "raw": {"usage": {"input_tokens": 700, "output_tokens": 50}}}) + "\n")
+    (tmp_path / "manifest.jsonl").write_text(json.dumps(
+        {"type": "run", "run_id": config.run_id, "config_hash": config_hash(config),
+         "config": config.model_dump()}) + "\n")
+    asyncio.run(run_matched(config, tmp_path, client_factory=lambda spec: SpendsTokens()))
+    run, _ = load_manifest(tmp_path)
+    assert run["prior_usage"]["input_tokens"] == 700 and run["prior_usage"]["output_tokens"] == 50
