@@ -30,8 +30,8 @@ the same code and is the one that will be merged; #2 is never merged.
 ```bash
 git clone https://github.com/Parley-Labs/parley-sim && cd parley-sim
 uv sync --extra openai --extra anthropic --extra openenv
-uv run pytest -q                       # ~160 tests
-uv run parley-sim smoke                # whole pipeline offline; ends "replay check: ok"
+uv run pytest -q                       # about 180 tests; 2 skip without the gym and usersim extras
+uv run parley-sim smoke                # whole pipeline offline; prints "replay check: ok"
 PYTHONPATH=examples uv run parley-sim matched examples/haggle.yaml --out /tmp/haggle
 ```
 
@@ -84,22 +84,27 @@ needs NVIDIA's persona dataset (see `docs/personas.md`).
 - **The noise floor is a per-episode scale.** It is the mean absolute gap
   between two replays of a cell, compared against a mean over 40 pairs, so it
   does not shrink with n. We kept it because it is the rule we pre-registered,
-  and it is conservative, but it decides H3 by 0.001 to 0.002. Is it a
-  reasonable bar, and how should we present it?
+  and it is conservative, but it decides H3 by 0.001 to 0.002, while the
+  floor's own bootstrap interval is about ±0.03. Sonnet's plain-LLM
+  "different" also depends on the replicate: on r1 it is +0.064, under the
+  floor (0.093). Is it a reasonable bar, and how should we present it?
 - **The equivalence margin** (0.08) was half the smallest scripted-vs-LLM gap
   in a pilot (0.16). In the confirmatory run that gap was 0.10 to 0.11, so
   the margin is about three quarters of it. The pilot data is not in this
   repository.
 - **Scope.** One small environment, two agents from one model family, Claude
-  customers in both LLM arms, 40 seeds, low reasoning effort. Every episode
-  ended in a deal, so the environment can't show effects on closing rates.
+  customers in both LLM arms, 40 seeds, low reasoning effort. Every
+  `equiv-sd3` episode ended in a deal, and only 4 Sonnet episodes in
+  `family-sd4` did not, so these runs say little about closing rates.
 - **Withheld data.** The persona arm's traces carry trait scores from NVIDIA's
-  persona dataset; its licence covers use for AI development but not clearly
-  redistribution, so they're not published.
+  persona dataset; its licence covers use for AI development, but
+  redistribution is not clearly covered, so they're not published.
 - **The honesty metric is experimental.** One blind labeller (one of the
-  authors), two rounds; bluff precision 64%, recall about 38%, kappa 0.45
-  weighted to the run. Three bugs were fixed after the held-out round, and the
-  fixed rules are not re-validated. No finding depends on it.
+  authors), two rounds; on the held-out round, bluff precision 64% (95%
+  interval 47 to 78%), recall about 38% (23 to 75%), kappa 0.45 (0.28 to
+  0.68), reweighted to the held-out pool. Three bugs were fixed after the
+  held-out round, and the fixed rules are not re-validated. No finding
+  depends on it.
 - **Adapters.** The OpenEnv package has been built as a Docker image and
   played over HTTP. The NeMo Gym adapter has only been tested against the
   pinned library, not a live Gym deployment; its training payload (the focal
@@ -117,7 +122,7 @@ is in the pull request that adds this file. Notable fixes:
 - the acceptance-by-offer-quality table counted offers the agent wasn't
   authorised to accept as declines, biasing arms unevenly;
 - the honesty metric's kappa was quoted on the stratified sample (0.64)
-  instead of reweighted to the run (0.45);
+  instead of reweighted to the held-out pool (0.45);
 - the OpenEnv server exposed the counterpart's private values and the
   solution through `state()` mid-episode, and could be locked by idle
   sessions;

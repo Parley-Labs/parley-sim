@@ -42,17 +42,16 @@ episodes):
   gained.)
 - Persona customers behaved more variedly: different opening offers and more
   varied wording.
-- Against scripted customers the agents gained about 10 points less of what
-  they could have, and negotiations ran longer, than against plain LLM
-  customers. Persona customers pointed the same way, but that gap was no
-  larger than replay-to-replay variation, so the pre-registered hypothesis
-  that both LLM arms differ from scripted was **not supported**.
+- Against scripted customers the agents gained about 6 to 13 points less of
+  what they could have (depending on the replicate and agent), and
+  negotiations ran longer, than against plain LLM customers. Persona
+  customers pointed the same way, but that gap was no larger than
+  replay-to-replay variation, so the pre-registered hypothesis that both LLM
+  arms differ from scripted was **not supported**.
 
 This is one small environment with one model family on both sides; read it as
 a worked example of the method. Full numbers, configs and reports are in
 [`results/`](results/README.md).
-
-Full numbers, configs and reports are in [`results/`](results/README.md).
 
 ## Install
 
@@ -86,7 +85,7 @@ everything runs:
 uv run parley-sim smoke
 ```
 
-It ends with a report and `replay check: ok`.
+It prints a report and `replay check: ok`.
 
 Then a real comparison. Describe the agents and counterparts in a config:
 
@@ -131,8 +130,10 @@ For each agent you get:
    and 90% intervals, the noise floor, and a verdict.
 3. **Diversity**: how much each arm's results and counterpart behavior vary
    across scenarios, and how varied the counterpart's opening messages are.
-4. **Acceptance by offer quality**: every offer the agent faced, accepted or
-   declined, binned by how good it was.
+4. **Acceptance by offer quality**: the agent's decisions facing an offer it
+   was authorised to accept, accepted or declined, binned by the offer's
+   quality. A standing offer is counted at each of the agent's decisions
+   while it stands.
 
 [Concepts](docs/concepts.md) explains each column and the verdict rules.
 
@@ -151,11 +152,11 @@ For each agent you get:
 
 `support_desk` is a retention negotiation. A customer wants to cancel; the
 agent can offer a discount, a service credit, a plan upgrade and billing
-terms, each within private authorization limits. The customer has private
-preferences and a walk-away value. Every possible deal is enumerable, so the
-efficient frontier and each side's best outcome are exact. It is deliberately
-small and easy to read; it exists to show the method, and to be replaced by
-yours.
+terms; the discount and the credit are capped by private authorization
+limits. The customer has private preferences and a walk-away value. Every
+possible deal is enumerable, so the efficient frontier and each side's best
+outcome are exact. It is deliberately small and easy to read; it exists to
+show the method, and to be replaced by yours.
 
 ## Command line
 

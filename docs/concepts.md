@@ -136,14 +136,16 @@ its own behavior even when the agent's results vary.
 
 ## Acceptance by offer quality
 
-Logging only accepted deals hides what an agent turned down. The report bins
-every offer the focal seat faced and was allowed to accept by its quality (its value to the focal seat
-relative to the best it could get, below walk-away to high) and shows the
-acceptance rate per bin and arm. Two arms can differ in acceptance simply
-because one kind of counterpart makes better offers; this table separates
-that from a change in the agent. Offers outside the agent's authority are left
-out, since accepting them is illegal: counting them as declines would bias
-any arm whose counterpart makes them often.
+Logging only accepted deals hides what an agent turned down. The report
+counts the focal seat's decisions facing an offer it was authorised to
+accept, accepted or declined, bins them by the offer's quality (its value to
+the focal seat relative to the best it could get, below walk-away to high)
+and shows the acceptance rate per bin and arm. A standing offer is counted at
+each of the focal seat's decisions while it stands. Two arms can differ in
+acceptance simply because one kind of counterpart makes better offers; this
+table separates that from a change in the agent. Offers outside the agent's
+authority are left out, since accepting them is illegal: counting them as
+declines would bias any arm whose counterpart makes them often.
 
 ## Strikes and fallbacks
 
