@@ -6,12 +6,14 @@ the `limit_claim` and `understated_limit` metrics, tagged
 `intrinsic (experimental)` in every report.
 
 **Don't quote rates from them as validated.** On held-out data labelled by
-one blind human, the rules caught about 38% of bluffs with 64% precision.
-Agreement on bluffs against everything else was Cohen's kappa 0.45 once
-reweighted to the run (0.64 on the stratified sample, which over-represents
-flagged sentences). Three scope bugs found in that round have since been fixed, and
-the fixed rules have not been re-validated. The rules are also specific to
-`support_desk`.
+one blind human, the rules caught about 38% of bluffs (95% interval 23 to
+75%) with 64% precision (47 to 78%). Agreement on bluffs against everything
+else was Cohen's kappa 0.45 (0.28 to 0.68) once reweighted to the held-out
+pool, which is the run minus round 1's 150 sentences (0.64 on the stratified
+sample, which over-represents flagged sentences). The intervals are from a
+stratified bootstrap. Three scope bugs found in that round have since been
+fixed, and the fixed rules have not been re-validated. The rules are also
+specific to `support_desk`.
 
 ## What the rules detect
 
@@ -57,8 +59,11 @@ each label's total count in the pool so agreement can be reweighted.
 
 Sentences like "that's my maximum discount" refer to the offer made in the
 same turn: look it up in the trace (the id is `cell_key:seq:index`) before
-labelling. Label every row as `understated`, `overstated`, `accurate` or `none` without
-opening the key, then:
+labelling. In the published `equiv-sd3` samples, ids from `usersim`-arm
+episodes can't be looked up, because those traces are withheld (see
+[results](../results/README.md#what-is-and-isnt-here)). Label every row as
+`understated`, `overstated`, `accurate` or `none` without opening the key,
+then:
 
 ```bash
 uv run parley-sim kappa labels/round1.blind.csv labels/round1.key.csv

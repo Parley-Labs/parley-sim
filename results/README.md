@@ -35,11 +35,18 @@ Every episode in every arm ended in a deal. About 5.5M input and 0.47M output
 tokens. The Claude calls were billed to our own Anthropic key through
 OpenRouter, so the reports show $0 for them.
 
-Two caveats a reader should weigh:
+Three caveats a reader should weigh:
 
 - **The noise floor is conservative.** It is the mean per-episode gap between
   two replays of the same cell, not a standard error, so it doesn't shrink
-  with more seeds. H3's persona comparison misses it by 0.001 to 0.002.
+  with more seeds. H3's persona comparison misses it by 0.001 to 0.002, and
+  the floor itself has a bootstrap interval of about ±0.03.
+- **Sonnet's plain-LLM "different" is as fragile as the persona
+  "inconclusive".** The verdicts use replicate r0, as pre-registered. On the
+  identical replicate r1, Sonnet's plain LLM vs scripted difference is +0.064,
+  95% interval (0.012, 0.121), below its noise floor (0.093), so the rule
+  would not call it different. Opus is different on both replicates (+0.113,
+  +0.128).
 - **The margin was set from the pilot.** 0.08 was half the smallest
   scripted-vs-LLM gap in the pilot (0.16). In this run that gap was smaller
   (0.10 to 0.11), so 0.08 is about three quarters of it. H1's intervals still
@@ -72,14 +79,14 @@ Nemotron $0.94); the Claude agent calls were billed to our own Anthropic key.
 | Reports as published (`report.md`, `report.json`, `joint-report.md`) | Traces of the `usersim` arm (160 episodes) |
 | Manifests, with the `usersim` rows removed | The persona panel itself |
 | Traces of every other arm (400 episodes) | |
-| Claim-validation samples and human labels, rounds 1 and 2 | |
+| Claim-validation samples and human labels, rounds 1 and 2 (agent sentences only; 104 of the 300 rows come from `usersim`-arm episodes, whose traces are withheld) | |
 
 The `usersim` traces record each persona's trait scores from NVIDIA's persona
 dataset, and the customers' in-character messages. The dataset's licence
-covers use for developing AI, not obviously redistribution, so we leave them
-out. Their results are in the published reports. Re-running the config with a
-freshly built panel reproduces the method, not these exact numbers, because a
-new panel draws different personas.
+covers use for developing AI, but redistribution is not clearly covered, so
+we leave them out. Their results are in the published reports. Re-running
+the config with a freshly built panel reproduces the method, not these exact
+numbers, because a new panel draws different personas.
 
 `scripts/curate_results.py` made this folder from the full run directories.
 
@@ -87,16 +94,22 @@ new panel draws different personas.
 
 ```bash
 uv run parley-sim report results/equiv-sd3 --margins focal_surplus_share=0.08,turns=0.8
+uv run parley-sim report results/equiv-sd3 results/family-sd4    # joint-report.md
 uv run parley-sim verify results/family-sd4/traces/*.jsonl
 ```
 
 The published reports were produced by the code at the time of each run.
 Recomputing with the current code matches them for every comparison that
-doesn't involve the withheld arm, with three known differences:
+doesn't involve the withheld arm, with four known differences:
 
 - the experimental claim metrics (`limit_claim`, `understated_limit`) changed
   because the claim rules were fixed after the run, and are now labelled
   experimental ([claim metrics](../docs/claims.md));
 - the acceptance-by-offer-quality tables now leave out offers the agent wasn't
   authorised to accept, which the published tables counted as declines;
-- the means table now states how many episodes each arm contributes.
+- the means table now states how many episodes each arm contributes;
+- the `Cells` and `Spend` header lines count only the episodes present, so
+  they leave out the withheld arm. `equiv-sd3` recomputes to `Cells: done=240`
+  and 2,340,767 input + 273,647 output tokens (published: 400 cells,
+  5,477,709 + 465,346); the joint report to `Cells: done=400` and 3,993,323 +
+  1,048,026 (published: 560 cells, 7,130,265 + 1,239,725).

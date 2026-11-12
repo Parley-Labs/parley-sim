@@ -24,10 +24,13 @@ decision.
 ## Setup
 
 ```bash
-uv sync --extra usersim
+uv sync --extra usersim --extra openai   # name every extra you use, in one command
 export NEMO_TELEMETRY_ENABLED=false
 uv run usersim setup-ngc          # then configure the NGC CLI with your NGC key
 ```
+
+`uv sync` removes any extra you don't name, so add the provider extra your
+lineup uses (`openai` for the config below) to the same command.
 
 Download the en_US Nemotron-Personas dataset from NGC as UserSim's
 [persona docs](https://github.com/NVIDIA-NeMo/UserSim/blob/main/docs/personas.md)
@@ -78,8 +81,9 @@ The persona datasets carry their own licence, separate from UserSim's and
 parley-sim's Apache-2.0. Per UserSim's documentation, the NGC datasets are
 under the NVIDIA Dataset License Agreement, which permits use for training
 and developing AI solutions and adds an AI ethics clause; the Hugging Face
-collection is CC BY 4.0. Read the agreement yourself before you share
-anything derived from it.
+collection is CC BY 4.0. Redistribution of the NGC data is not clearly
+covered. Read the agreement yourself before you share anything derived from
+it.
 
 What parley-sim does about it:
 

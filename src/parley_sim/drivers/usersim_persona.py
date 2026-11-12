@@ -11,8 +11,8 @@ Label results "UserSim personas and behavior model", not "UserSim".
 
 Personas come from `usersim panel --locale en_US --num-personas N --out
 ~/.cache/parley-sim/usersim-en_US.parquet`, which samples NVIDIA's Nemotron-Personas datasets without
-any model calls. Those rows are licensed for download, not redistribution:
-keep the file out of the repository.
+any model calls. Their licence permits use for developing AI, but
+redistribution is not clearly covered: keep the file out of the repository.
 """
 from __future__ import annotations
 
