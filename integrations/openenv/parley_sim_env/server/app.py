@@ -12,7 +12,7 @@ Configured from the process environment, so one image serves any arm:
     PARLEY_MAX_REFUSALS   stop a session after this many provider refusals (default 3)
     MAX_CONCURRENT_ENVS   concurrent sessions (default 8)
     PARLEY_SESSION_TIMEOUT  close sessions idle this many seconds (default 600); must be at
-                          least 2 x the largest timeout_s of a seated lineup model
+                          least 2 x the sum of the seated model counterparts' timeout_s
     PARLEY_RELEASE_TRACE  "after_done" (default): state() carries the full trace once an
                           episode is done; "never": state() only ever shows what the
                           focal seat saw, plus outcomes and metrics

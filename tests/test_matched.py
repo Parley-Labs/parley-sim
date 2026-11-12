@@ -567,6 +567,26 @@ def test_resume_counts_tokens_of_cells_cut_off_mid_episode(tmp_path):
     assert run["prior_usage"]["input_tokens"] == 700 and run["prior_usage"]["output_tokens"] == 50
 
 
+def test_resume_interrupted_before_cleanup_does_not_count_a_trace_twice(tmp_path):
+    config = api_cfg(concurrency=1)
+    key = next(c.cell_key for c in build_grid(config) if c.arm == "aoc")
+    traces = tmp_path / "traces"
+    traces.mkdir(parents=True)
+    # An earlier resume counted this trace into prior_usage, then stopped
+    # before deleting it.
+    (traces / f"{key}.jsonl").write_text(json.dumps(
+        {"type": "decision", "raw": {"usage": {"input_tokens": 700, "output_tokens": 50}}}) + "\n")
+    (tmp_path / "manifest.jsonl").write_text(json.dumps(
+        {"type": "run", "run_id": config.run_id, "config_hash": config_hash(config),
+         "config": config.model_dump(),
+         "prior_usage": {"input_tokens": 700, "output_tokens": 50},
+         "usage_counted_traces": [key]}) + "\n")
+    asyncio.run(run_matched(config, tmp_path, client_factory=lambda spec: SpendsTokens()))
+    run, _ = load_manifest(tmp_path)
+    assert run["prior_usage"]["input_tokens"] == 700 and run["prior_usage"]["output_tokens"] == 50
+    assert "usage_counted_traces" not in run
+
+
 def test_report_json_has_no_nan_for_a_single_pair(tmp_path):
     asyncio.run(run_matched(cfg(seeds="0:1"), tmp_path))
     text = json.dumps(build_report(tmp_path))
