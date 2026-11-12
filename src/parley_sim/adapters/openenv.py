@@ -4,9 +4,20 @@ The OpenEnv client (a trainer such as TRL's GRPOTrainer, or a script) plays the
 focal seat. `reset` builds one parley-sim Episode and advances every other seat
 until the focal seat must act; `step` submits the focal seat's move and does
 the same again. Scripted counterparts run in-process; model counterparts are
-parley-sim model seats called from inside the environment. The full trace,
-including every counterpart decision, is exposed through `state`, so opponent
-behavior is never hidden in the container.
+parley-sim model seats called from inside the environment.
+
+While an episode runs, `state` shows only what the focal seat can see. Once the
+episode is done, its full trace (the scenario, ground truth and every
+counterpart decision) is released through `state` by default, so opponent
+behavior is never hidden in the container. A client chooses its seeds, so it can
+end an episode at once, read the released trace, and replay the same seed: when
+the client must not learn counterpart information, serve with
+`release_trace="never"` (`PARLEY_RELEASE_TRACE=never` in the packaged server).
+
+Play goes only through OpenEnv's WebSocket sessions (`/ws`, which `ParleySimEnv`
+uses), where the session limit, idle timeout and refusal breaker apply. The
+stateless HTTP `/reset`, `/step` and `/state` routes are disabled, and the
+Gradio web interface is never mounted.
 
 Targets openenv 0.12. A server entry point (OpenEnv's `server/app.py`):
 
@@ -16,7 +27,7 @@ Targets openenv 0.12. A server entry point (OpenEnv's `server/app.py`):
         seats={"agent": "client", "customer": "policy:hardliner"},
     )
 
-    # uvicorn app:app --port 8000
+    # uvicorn app:app --host 127.0.0.1 --port 8000
 
 and a client loop, here driving the focal seat with any model:
 
@@ -33,13 +44,21 @@ and a client loop, here driving the focal seat with any model:
 from __future__ import annotations
 
 import asyncio
+import functools
+import inspect
+import json
+import logging
+import os
 from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
 
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
 from openenv.core.client_types import StepResult
 from openenv.core.env_client import EnvClient
-from openenv.core.env_server.http_server import create_app
+from openenv.core.env_server.http_server import create_fastapi_app
 from openenv.core.env_server.interfaces import Environment
 from openenv.core.env_server.types import Action, ConcurrencyConfig, Observation, State
 from pydantic import Field, model_validator
@@ -57,20 +76,57 @@ from parley_sim.drivers.models import (
 from parley_sim.runtime.episode import DecisionRequest, DecisionResult, Episode, EpisodeComplete, EpisodeSpec
 
 CLIENT = "client"
+RELEASE_TRACE = ("after_done", "never")
+# Longest focal action accepted, in characters (`text`, or `move` as JSON). Every
+# action is stored in the trace and sent back with each state().
+MAX_ACTION_CHARS = 65536
+# Client wait for one server reply. One counterpart decision can take two
+# attempts of the model's timeout_s (120 s by default), so OpenEnv's 60 s is too
+# short.
+DEFAULT_MESSAGE_TIMEOUT_S = 300.0
+# Anything a text interface's parse can raise on hostile input: deeply nested
+# JSON overflows the recursion limit, odd types raise TypeError.
+_PARSE_ERRORS = (MalformedOutput, RecursionError, ValueError, TypeError)
+_STATELESS_ROUTES = ("/reset", "/step", "/state")
+_log = logging.getLogger(__name__)
+_closing: set[asyncio.Task[None]] = set()  # strong refs to scheduled client closes
 
 
 class ParleySimAction(Action):
     """The focal seat's turn: either the model's raw reply (`text`, parsed with
-    the env's text interface) or an already-structured `move`."""
+    the env's text interface) or an already-structured `move`. A `move` is cut
+    down to the keys the action schema declares and then parsed like `text`."""
 
-    text: str | None = Field(default=None, description="Model output, JSON per action_schema")
+    text: str | None = Field(default=None, max_length=MAX_ACTION_CHARS,
+                             description="Model output, JSON per action_schema")
     move: dict[str, Any] | None = Field(default=None, description="Structured env action")
 
     @model_validator(mode="after")
     def _one(self) -> ParleySimAction:
         if (self.text is None) == (self.move is None):
             raise ValueError("give exactly one of text or move")
+        if self.move is not None:
+            try:
+                size = len(json.dumps(self.move))
+            except (RecursionError, TypeError, ValueError):
+                raise ValueError("move must be plain, not deeply nested, JSON") from None
+            if size > MAX_ACTION_CHARS:
+                raise ValueError(f"move is {size} characters as JSON; "
+                                 f"the limit is {MAX_ACTION_CHARS}")
         return self
+
+
+def _project(value: Any, schema: Any) -> Any:
+    """`value` with only the object keys `schema` declares, recursively."""
+    if not isinstance(schema, dict):
+        return value
+    props = schema.get("properties")
+    if isinstance(value, dict) and isinstance(props, dict):
+        return {k: _project(v, props[k]) for k, v in value.items() if k in props}
+    items = schema.get("items")
+    if isinstance(value, list) and isinstance(items, dict):
+        return [_project(v, items) for v in value]
+    return value
 
 
 class ParleySimObservation(Observation):
@@ -103,10 +159,14 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
     "model:<lineup name>".
 
     `state().trace` holds only what the focal seat may see (its own decisions
-    and the public move events) until the episode ends; the full trace, with
-    the scenario, ground truth and counterpart decisions, is released once it
-    is done, so a client cannot read the counterpart's private values or the
-    solution mid-episode. The refusal breaker spans the whole session."""
+    and the public move events) until the episode ends. With
+    `release_trace="after_done"` (the default) the full trace, with the
+    scenario, ground truth and counterpart decisions, is released once the
+    episode is done. A client picks its seeds, so it can end an episode at once,
+    read that trace, and replay the seed: use `release_trace="never"` when the
+    client must not learn counterpart information. Then the trace stays
+    focal-only for good, and `state()` adds only the outcomes and metrics.
+    The refusal breaker spans the whole session."""
 
     SUPPORTS_CONCURRENT_SESSIONS = True
 
@@ -114,12 +174,22 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
                  focal_seat: Seat | None = None, env_config: dict[str, Any] | None = None,
                  lineup: list[ModelSpec | dict[str, Any]] | None = None,
                  client_factory: Callable[[ModelSpec], ProviderClient] = build_client,
-                 reward_metric: str = "focal_surplus_share", max_refusals: int = 3):
+                 reward_metric: str = "focal_surplus_share", max_refusals: int = 3,
+                 release_trace: str = "after_done"):
         super().__init__()
+        self._clients: dict[str, ProviderClient] = {}
+        self._loop: asyncio.AbstractEventLoop | None = None  # the sync API's loop
+        self._client_loop: asyncio.AbstractEventLoop | None = None  # where clients ran
+        self._closed = False
+        self._episode: Episode | None = None
+        self._pending: DecisionRequest | None = None
         self.entry = envs.get(env)
         self.focal = focal_seat or self.entry.focal_seat
         if seats.get(self.focal) != CLIENT:
             raise ValueError(f"seat {self.focal!r} must be labelled {CLIENT!r}")
+        if release_trace not in RELEASE_TRACE:
+            raise ValueError(f"release_trace {release_trace!r} must be one of {list(RELEASE_TRACE)}")
+        self.release_trace = release_trace
         self.seats = dict(seats)
         self.env_config = dict(env_config or {})
         self.lineup = {m.name: m for m in (ModelSpec(**m) if isinstance(m, dict) else m
@@ -131,40 +201,80 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
         self.reward_metric = reward_metric
         self.max_refusals = max_refusals
         self._breaker = Breaker(max_refusals)
-        self._clients: dict[str, ProviderClient] = {}
-        for seat, label in self.seats.items():  # fail at startup, not at the first reset
-            if seat == self.focal:
-                continue
-            kind, _, name = label.partition(":")
-            if kind == "policy":
-                self.entry.make_policy(name, seat)
-            elif kind == "model":
-                if name not in self.lineup:
-                    raise ValueError(f"seat {seat!r}: {name!r} is not in the lineup")
-                model = self.lineup[name]
-                if model.provider == "scripted":
-                    self.entry.make_policy(model.model, seat)
+        try:
+            for seat, label in self.seats.items():  # fail at startup, not at the first reset
+                if seat == self.focal:
+                    continue
+                kind, _, name = label.partition(":")
+                if kind == "policy":
+                    self.entry.make_policy(name, seat)
+                elif kind == "model":
+                    if name not in self.lineup:
+                        raise ValueError(f"seat {seat!r}: {name!r} is not in the lineup")
+                    model = self.lineup[name]
+                    if model.provider == "scripted":
+                        self.entry.make_policy(model.model, seat)
+                    elif name not in self._clients:
+                        self._clients[name] = client_factory(model)
                 else:
-                    self._clients[name] = client_factory(model)
-            else:
-                raise ValueError(f"seat {seat!r}: label {label!r} must start with "
-                                 "'policy:' or 'model:'")
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._closed = False
+                    raise ValueError(f"seat {seat!r}: label {label!r} must start with "
+                                     "'policy:' or 'model:'")
+        except BaseException:
+            self.close()  # clients made for earlier seats
+            raise
         self.text = self.entry.text()
-        self._episode: Episode | None = None
-        self._pending: DecisionRequest | None = None
         self._counterparts: dict[Seat, ModelSeat | ScriptedSeat] = {}
         self._state = ParleySimState()
+
+    @property
+    def max_decision_s(self) -> float:
+        """Longest one counterpart decision can take: two attempts of the
+        slowest seated model's timeout_s (0 with no model counterparts)."""
+        models = [self.lineup[label.split(":", 1)[1]] for seat, label in self.seats.items()
+                  if seat != self.focal and label.startswith("model:")]
+        return 2 * max((m.timeout_s for m in models if m.provider != "scripted"), default=0.0)
 
     def close(self) -> None:
         """Called by OpenEnv when a session ends or is reaped for idleness.
         After this, reset and step are refused, so a connection whose slot
-        was released can make no further episodes or provider calls."""
+        was released can make no further episodes or provider calls. Closes
+        the provider clients; calling it again does nothing."""
         self._closed = True
         self._episode, self._pending = None, None
+        clients, self._clients = list(self._clients.values()), {}
+        if clients:
+            self._close_clients(clients)
         if self._loop is not None and not self._loop.is_closed() and not self._loop.is_running():
             self._loop.close()
+
+    def _close_clients(self, clients: list[ProviderClient]) -> None:
+        """Close the clients on the loop they ran on, which owns their
+        connections. OpenEnv calls close() from a worker thread while the
+        server's loop runs, or from that loop itself; the sync API has its own
+        persistent loop; a client that never ran can close on any loop."""
+        coro = _aclose_all(clients)
+        loop = self._client_loop
+        if loop is not None and loop.is_closed():
+            loop = None
+        try:
+            running: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if loop is not None and loop.is_running() and loop is not running:
+            future = asyncio.run_coroutine_threadsafe(coro, loop)
+            if running is None:  # a worker thread: wait, the loop is free to run it
+                try:
+                    future.result(timeout=10)
+                except Exception as exc:  # best effort, like OpenEnv's own cleanup
+                    _log.warning("closing provider clients failed: %r", exc)
+        elif running is not None:
+            task = running.create_task(coro)
+            _closing.add(task)
+            task.add_done_callback(_closing.discard)
+        elif loop is not None:
+            loop.run_until_complete(coro)
+        else:
+            asyncio.run(coro)
 
     def _check_open(self) -> None:
         if self._closed:
@@ -189,27 +299,32 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
     async def reset_async(self, seed: int | None = None, episode_id: str | None = None,
                           arm: str | None = None, **kwargs: Any) -> ParleySimObservation:
         self._check_open()
+        self._client_loop = asyncio.get_running_loop()
+        # Build and validate everything first, so a bad argument leaves the
+        # previous episode and its state as they were.
         seed = 0 if seed is None else int(seed)
+        state = ParleySimState(episode_id=episode_id or str(uuid4()), step_count=0,
+                               seed=seed, arm=arm, focal_seat=self.focal, seats=self.seats)
         spec = EpisodeSpec(seed=seed, seats=self.seats, config=self.env_config,
                            focal_seat=self.focal, arm=arm, cell_key=episode_id)
         policies = {s: self.entry.make_policy(label.split(":", 1)[1], s)
                     for s, label in self.seats.items() if label.startswith("policy:")}
-        self._episode = Episode(self.entry.env(), spec, policies)
-        self._counterparts = {}
+        episode = Episode(self.entry.env(), spec, policies)
+        counterparts: dict[Seat, ModelSeat | ScriptedSeat] = {}
         for s, label in self.seats.items():
             if s == self.focal or not label.startswith("model:"):
                 continue
             model = self.lineup[label.split(":", 1)[1]]
             if model.provider == "scripted":
-                self._counterparts[s] = ScriptedSeat(model, self.text,
-                                                     self.entry.make_policy(model.model, s))
+                counterparts[s] = ScriptedSeat(model, self.text,
+                                               self.entry.make_policy(model.model, s))
             else:
-                self._counterparts[s] = ModelSeat(model, self.text, self._clients[model.name],
-                                                  self._breaker)
-        self._state = ParleySimState(episode_id=episode_id or str(uuid4()), step_count=0,
-                                     seed=seed, arm=arm, focal_seat=self.focal,
-                                     seats=self.seats)
-        return await self._advance(self._episode.advance(), strike=None)
+                counterparts[s] = ModelSeat(model, self.text, self._clients[model.name],
+                                            self._breaker)
+        first = episode.advance()
+        self._episode, self._counterparts, self._state, self._pending = (
+            episode, counterparts, state, None)
+        return await self._advance(first, strike=None)
 
     def step(self, action: ParleySimAction, timeout_s: float | None = None,
              **kwargs: Any) -> ParleySimObservation:
@@ -218,33 +333,52 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
     async def step_async(self, action: ParleySimAction, timeout_s: float | None = None,
                          **kwargs: Any) -> ParleySimObservation:
         self._check_open()
-        if self._episode is None or self._pending is None:
+        self._client_loop = asyncio.get_running_loop()
+        episode, req = self._episode, self._pending
+        if episode is None or req is None:
             raise RuntimeError("call reset() before step(), and not after the episode ends")
-        req, self._pending = self._pending, None
+        # The request stays pending until the episode takes the result, so an
+        # unexpected error before that leaves the session able to step again.
+        result = self._focal_result(req, action)
+        try:
+            event = episode.advance(result)
+        except BaseException as exc:  # the episode took the request: it cannot go on
+            self._pending = None
+            if episode.result is None:
+                episode.abort(repr(exc))
+            self._state.done = True
+            raise
+        self._pending = None
         self._state.step_count += 1
-        if action.text is not None:
-            try:
-                parsed, explanation = self.text.parse(action.text)
-                result = DecisionResult(req.request_id, parsed, explanation=explanation,
-                                        raw={"source": "openenv", "payload": action.text})
-            except MalformedOutput as exc:
-                result = DecisionResult(req.request_id, None, strike="malformed_output",
-                                        detail=str(exc),
-                                        raw={"source": "openenv", "payload": action.text})
-        else:
-            result = DecisionResult(req.request_id, action.move, raw={"source": "openenv"})
-        event = self._episode.advance(result)
-        decision = next(l for l in reversed(self._episode.lines) if l["type"] == "decision"
+        decision = next(l for l in reversed(episode.lines) if l["type"] == "decision"
                         and l["seat"] == self.focal)
         return await self._advance(event, strike=decision["strike"])
+
+    def _focal_result(self, req: DecisionRequest, action: ParleySimAction) -> DecisionResult:
+        """Parse the focal action as a model seat's reply would be. A `move`
+        keeps only the keys the action schema declares. Any parse failure is
+        a malformed_output strike."""
+        if action.text is not None:
+            payload: Any = action.text
+            raw: JSON = {"source": "openenv", "payload": action.text}
+        else:
+            payload, raw = _project(action.move, self.text.action_schema), {"source": "openenv"}
+        try:
+            parsed, explanation = self.text.parse(payload)
+        except _PARSE_ERRORS as exc:
+            detail = str(exc) if isinstance(exc, MalformedOutput) else f"{type(exc).__name__}: {exc}"
+            return DecisionResult(req.request_id, None, strike="malformed_output",
+                                  detail=detail[:500], raw=raw)
+        return DecisionResult(req.request_id, parsed, explanation=explanation, raw=raw)
 
     @property
     def state(self) -> ParleySimState:
         if self._episode is not None:
             lines = self._episode.lines
-            if self._episode.result is None:  # mid-episode: only what the focal seat can see
-                # A decision's `context` is evaluation data (it can hold the
-                # counterpart's valuation of a standing offer), so it is left out.
+            if self._episode.result is None or self.release_trace == "never":
+                # Only what the focal seat can see. A decision's `context` is
+                # evaluation data (it can hold the counterpart's valuation of a
+                # standing offer), so it is left out.
                 lines = [l if l["type"] == "event" else {k: v for k, v in l.items() if k != "context"}
                          for l in lines if l["type"] == "event"
                          or (l["type"] == "decision" and l["seat"] == self.focal)]
@@ -253,24 +387,27 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
 
     async def _advance(self, event: DecisionRequest | EpisodeComplete,
                        strike: str | None) -> ParleySimObservation:
-        assert self._episode is not None
+        episode = self._episode
+        assert episode is not None
         try:
             while isinstance(event, DecisionRequest) and event.seat != self.focal:
-                event = self._episode.advance(await self._counterparts[event.seat].decide(event))
+                decision = await self._counterparts[event.seat].decide(event)
+                self._check_open()  # the idle reaper may have closed the session meanwhile
+                event = episode.advance(decision)
         except BaseException as exc:
-            if self._episode.result is None:
-                self._episode.abort(repr(exc))
+            if episode.result is None:
+                episode.abort(repr(exc))
             self._state.done = True
             raise
         if isinstance(event, EpisodeComplete):
-            metrics = self.entry.episode_metrics(self._episode.lines)
+            metrics = self.entry.episode_metrics(episode.lines)
             reward = metrics.get(self.reward_metric)
             self._state.done, self._state.outcomes, self._state.metrics = (
                 True, dict(event.outcomes), metrics)
             return ParleySimObservation(done=True, reward=float(reward or 0.0),
                                         last_strike=strike, outcomes=dict(event.outcomes),
                                         metrics=metrics,
-                                        turn=self._episode.env.turn(self._episode.state))
+                                        turn=episode.env.turn(episode.state))
         self._pending = event
         system, user = self.text.render(event.observation)
         return ParleySimObservation(seat=event.seat, turn=event.turn, system_prompt=system,
@@ -278,21 +415,80 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
                                     observation=event.observation, last_strike=strike)
 
 
+async def _aclose_all(clients: list[ProviderClient]) -> None:
+    """Close each provider client: its own aclose/close if it has one, else
+    the SDK client it wraps (`_client`, an AsyncOpenAI or AsyncAnthropic)."""
+    for client in clients:
+        closer = (getattr(client, "aclose", None) or getattr(client, "close", None)
+                  or getattr(getattr(client, "_client", None), "close", None))
+        if closer is None:
+            continue
+        try:
+            result = closer()
+            if inspect.isawaitable(result):
+                await result
+        except Exception as exc:  # best effort: one failure must not keep the others open
+            _log.warning("closing provider client %r failed: %r", client, exc)
+
+
+def _sessions_only(request: Request) -> JSONResponse:
+    return JSONResponse(status_code=405, content={"detail": (
+        f"{request.url.path} is disabled on this server: stateless HTTP calls bypass the "
+        "session limit, idle timeout and refusal breaker. Play over the WebSocket session "
+        "API at /ws (ParleySimEnv does).")})
+
+
 def create_parley_app(*, max_concurrent_envs: int = 8, session_timeout_s: float | None = 600.0,
                       **environment_kwargs: Any):
     """An OpenEnv FastAPI app serving ParleySimEnvironment(**environment_kwargs).
-    Idle sessions are closed after `session_timeout_s`, so abandoned sessions
-    cannot hold every slot. The server has no authentication of its own."""
-    ParleySimEnvironment(**environment_kwargs)  # validate the configuration at startup
-    return create_app(lambda: ParleySimEnvironment(**environment_kwargs), ParleySimAction,
-                      ParleySimObservation, env_name="parley_sim",
-                      concurrency_config=ConcurrencyConfig(max_concurrent_envs=max_concurrent_envs,
-                                                           session_timeout=session_timeout_s),
-                      state_cls=ParleySimState)
+
+    All play goes through WebSocket sessions (`/ws`): the stateless HTTP
+    `/reset`, `/step` and `/state` routes answer 405, since each such call
+    would build a fresh environment (new breaker, new provider clients)
+    outside the session limit. The Gradio web interface is never mounted,
+    whatever ENABLE_WEB_INTERFACE says, because it shares one environment
+    between all its users. Idle sessions are closed after `session_timeout_s`,
+    which must cover two attempts of the slowest model counterpart's
+    timeout_s. The server has no authentication of its own."""
+    probe = ParleySimEnvironment(**environment_kwargs)  # validate the configuration at startup
+    try:
+        needed = probe.max_decision_s
+    finally:
+        probe.close()
+    if session_timeout_s is not None and session_timeout_s < needed:
+        raise ValueError(
+            f"session timeout {session_timeout_s:g}s (PARLEY_SESSION_TIMEOUT) is shorter than "
+            f"one counterpart decision can take ({needed:g}s: two attempts of the slowest "
+            "model's timeout_s), so a session could be closed as idle mid-step. Raise the "
+            f"session timeout to at least {needed:g}s, or lower timeout_s in the lineup.")
+    if os.getenv("ENABLE_WEB_INTERFACE", "false").strip().lower() in ("true", "1", "yes"):
+        _log.warning("ENABLE_WEB_INTERFACE is set, but parley-sim never mounts OpenEnv's web "
+                     "interface: it would share one environment between all its users. Serve "
+                     "without it (`openenv push --no-interface`) and play over /ws.")
+    # A partial over the class, not a lambda: OpenEnv then reads the class
+    # attributes instead of building (and closing) a throwaway environment.
+    factory = functools.partial(ParleySimEnvironment, **environment_kwargs)
+    app = create_fastapi_app(factory, ParleySimAction, ParleySimObservation, env_name="parley_sim",
+                             concurrency_config=ConcurrencyConfig(
+                                 max_concurrent_envs=max_concurrent_envs,
+                                 session_timeout=session_timeout_s),
+                             state_cls=ParleySimState)
+    app.router.routes[:] = [r for r in app.router.routes
+                            if not (isinstance(r, APIRoute) and r.path in _STATELESS_ROUTES)]
+    for path in _STATELESS_ROUTES:
+        app.add_api_route(path, _sessions_only, methods=["GET", "POST"], include_in_schema=False)
+    return app
 
 
 class ParleySimEnv(EnvClient[ParleySimAction, ParleySimObservation, ParleySimState]):
-    """OpenEnv client for a parley-sim server."""
+    """OpenEnv client for a parley-sim server. It waits up to
+    `message_timeout_s` (default 300 s; OpenEnv's own default is 60 s) for each
+    reply, since one counterpart decision can take two attempts of the model's
+    timeout_s (120 s each by default). Raise it if you raise timeout_s."""
+
+    def __init__(self, base_url: str | None = None, connect_timeout_s: float = 10.0,
+                 message_timeout_s: float = DEFAULT_MESSAGE_TIMEOUT_S, **kwargs: Any):
+        super().__init__(base_url, connect_timeout_s, message_timeout_s, **kwargs)
 
     def _step_payload(self, action: ParleySimAction) -> JSON:
         return action.model_dump(exclude_none=True, exclude={"metadata"})

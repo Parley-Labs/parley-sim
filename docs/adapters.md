@@ -23,7 +23,7 @@ any environment parley-sim can load, including
 
 Status: both adapters are covered by unit tests against the pinned library
 versions. The OpenEnv package has also been built as a Docker image and
-played end to end over HTTP. The NeMo Gym adapter has not yet run against a
+played end to end through its WebSocket client. The NeMo Gym adapter has not yet run against a
 live Gym deployment with real agent servers; its training payload is tested
 through Gym's own rollout-record code, not yet through a NeMo-RL training run. Reports of what breaks are
 welcome.
@@ -128,18 +128,41 @@ Install the `openenv` extra from a checkout (`uv sync --extra openenv
 Your client (a trainer such as TRL's GRPOTrainer, or a script) plays the
 focal seat through `reset` and `step`. Counterparts, scripted or model, run
 inside the environment. While an episode runs, `state()` shows only what the
-focal seat can see; once it ends, the full trace, including the scenario,
-ground truth and every counterpart decision, is released, so opponent
-behavior is never hidden in the container and never leaked mid-episode.
+focal seat can see. Once an episode ends, its full trace, including the
+scenario, ground truth and every counterpart decision, is released, so
+opponent behavior is never hidden in the container. The client chooses the
+seeds, so it can end an episode at once, read the released trace, and replay
+the same seed knowing the counterpart's private values. When the client must
+not learn counterpart information, run the server with
+`PARLEY_RELEASE_TRACE=never`: `state()` then only ever shows what the focal
+seat saw, plus the outcomes and metrics.
+
+Play goes only through OpenEnv's WebSocket sessions (`/ws`, which
+`ParleySimEnv` uses), where the session limit, idle timeout and refusal
+breaker apply. The stateless HTTP `/reset`, `/step` and `/state` routes answer
+405, and OpenEnv's web interface is never mounted, whatever
+`ENABLE_WEB_INTERFACE` says, because it would share one environment between
+all its users. If you deploy with `openenv push`, pass `--no-interface`.
+
+`ParleySimEnv` waits up to 300 seconds for each reply (`message_timeout_s`;
+OpenEnv's default is 60), since one model counterpart turn can take two
+attempts of its `timeout_s` (120 seconds by default). Raise it if you raise
+`timeout_s`. A focal reply may be up to 65,536 characters; a structured `move`
+keeps only the keys the action schema declares.
 
 The configuration (seat labels, lineup names, policies, reward metric,
 provider keys) is checked when the server starts, so a typo fails startup
 instead of every reset.
 
 The server has no authentication, and with model counterparts every session
-spends your provider keys. `uv run --project . server` binds to localhost by
-default. Idle sessions close after `PARLEY_SESSION_TIMEOUT` seconds (default
-600), so abandoned sessions can't hold every slot.
+spends your provider keys, so expose it only on a trusted network.
+`uv run --project . server`, run from `integrations/openenv/parley_sim_env`
+(`--project .` is the current directory), binds to localhost by default. Idle
+sessions close after `PARLEY_SESSION_TIMEOUT` seconds (default 600), so
+abandoned sessions can't hold every slot. The server refuses to start if that
+is shorter than twice the largest `timeout_s` of a seated lineup model, since
+the idle check could otherwise close a session in the middle of a step; leave
+room for your own model's time per turn as well.
 
 A ready-to-build package is in
 [`integrations/openenv/parley_sim_env`](../integrations/openenv/parley_sim_env/README.md),
@@ -147,8 +170,12 @@ with its own README, `openenv.yaml` and Dockerfile:
 
 ```bash
 docker build -f integrations/openenv/parley_sim_env/server/Dockerfile -t parley-sim-env .
-docker run -p 8000:8000 parley-sim-env
+docker run -p 127.0.0.1:8000:8000 parley-sim-env
 ```
+
+The image listens on all interfaces inside the container;
+`-p 127.0.0.1:8000:8000` publishes the port on this machine only. There is no
+authentication, so publish it more widely only on a trusted network.
 
 Play an episode:
 
@@ -175,10 +202,12 @@ The server reads its configuration from environment variables:
 | `PARLEY_REWARD_METRIC` | `focal_surplus_share` | Which episode metric is the reward |
 | `PARLEY_MAX_REFUSALS` | `3` | Stop a session after this many provider refusals |
 | `MAX_CONCURRENT_ENVS` | `8` | Concurrent sessions |
-| `PARLEY_SESSION_TIMEOUT` | `600` | Close sessions idle this many seconds |
+| `PARLEY_SESSION_TIMEOUT` | `600` | Close sessions idle this many seconds; at least 2 × the largest seated `timeout_s` |
+| `PARLEY_RELEASE_TRACE` | `after_done` | `after_done`: full trace in `state()` once an episode is done; `never`: focal view plus outcomes and metrics only |
 
 Provider keys for model counterparts are read from the container's
-environment at runtime (`docker run -e OPENROUTER_API_KEY ...`); never bake
+environment at runtime
+(`docker run -p 127.0.0.1:8000:8000 -e OPENROUTER_API_KEY ...`); never bake
 them into the image.
 
 A reply that doesn't parse, or an illegal move, is recorded as a strike and
