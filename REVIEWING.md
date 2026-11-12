@@ -112,8 +112,9 @@ needs NVIDIA's persona dataset (see `docs/personas.md`).
   pinned library, not a live Gym deployment; its training payload (the focal
   seat's token-bearing `response`) is tested through Gym's own rollout-record
   code but not through a NeMo-RL training run.
-- **Commit history was re-authored** before publication (authorship only; the
-  trees are identical). Commit hashes cited in older notes were updated.
+- **Commit history was rewritten** before publication: authorship, and the
+  package's working name in the first two commits. The final code is
+  unchanged. Commit hashes cited in older notes were updated.
 
 ## What an internal review already found
 
@@ -135,6 +136,24 @@ is in the pull request that adds this file. Notable fixes:
 - `verify` passed truncated or edited traces;
 - the docs overstated H3 ("partly supported"), described the main metric as a
   share of the deal, and misreported the Muse invalid-move rate and the spend.
+
+A second round of six area reviews (model seats, NeMo Gym, OpenEnv, runtime,
+statistics, docs) then found, among others:
+
+- `verify` and `report` imported and ran a module named inside the trace or
+  run directory being checked, and `verify` still passed edited
+  observations, events and games cut short;
+- a counterpart model that failed every call (wrong model ID, no credit)
+  produced "done" cells played entirely on fallback moves;
+- the OpenEnv server's stateless HTTP routes (`/reset`, `/step`, `/state`,
+  `/mcp`) ran paid episodes or built provider clients outside the session
+  cap, idle timeout and refusal breaker;
+- `openai_compat` sent `OPENROUTER_API_KEY` to any gateway host;
+- the NeMo Gym adapter's documented task row and agent config did not match
+  what Gym 0.7 sends and loads;
+- a single matched pair could be called "different";
+- Sonnet's plain-LLM "different" (H3) holds on one replicate and not the
+  other, which `results/README.md` now says.
 
 Found and deliberately not changed (tell us if you disagree):
 
