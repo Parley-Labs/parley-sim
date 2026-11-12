@@ -129,10 +129,20 @@ def build_report(*out_dirs: str | Path,
     status_counts: dict[str, int] = defaultdict(int)
     spend = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
     arm_defs: dict[str, tuple[Any, str]] = {}
+    focal_defs: dict[str, tuple[str, str]] = {}
     for out_dir in out_dirs:
         out = Path(out_dir)
         run, rows = load_manifest(out)
         runs.append(run)
+        lineup = {m["name"]: m for m in run["config"]["lineup"]}
+        for focal in {c["focal"] for c in rows if c["status"] == "done"}:
+            # Pairs are matched on the focal model's name, so the name must
+            # mean the same model (provider, model id, settings) in every run.
+            definition = digest(lineup.get(focal))
+            prior = focal_defs.setdefault(focal, (definition, str(out)))
+            if prior[0] != definition:
+                raise ValueError(f"focal model {focal!r} is configured differently in "
+                                 f"{prior[1]} and {out}")
         for arm in {c["arm"] for c in rows if c["status"] == "done"}:
             definition = _arm_definition(run["config"], arm)
             prior = arm_defs.setdefault(arm, (definition, str(out)))

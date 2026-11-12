@@ -218,3 +218,16 @@ def test_halt_summary_counts_cells_not_the_halt_row(tmp_path):
     assert halt_summary(m) == ("403", [])
     m.write_text(json.dumps({"type": "run"}) + "\n")
     assert halt_summary(m) is None
+
+
+def test_report_refuses_a_focal_name_that_means_different_models(tmp_path):
+    base = cfg()
+    asyncio.run(run_matched(base, tmp_path / "a"))
+    lineup = base.model_dump()["lineup"]
+    lineup[0] = {**lineup[0], "max_tokens": 1234}  # same focal name, different settings
+    lineup.append({"name": "scripted-reasonable", "provider": "scripted", "model": "reasonable"})
+    other = cfg(lineup=lineup, extra_arms={"persona": ["scripted-reasonable"]},
+                run_arms=["persona"])
+    asyncio.run(run_matched(other, tmp_path / "b"))
+    with pytest.raises(ValueError, match="configured differently"):
+        build_report(tmp_path / "a", tmp_path / "b")
