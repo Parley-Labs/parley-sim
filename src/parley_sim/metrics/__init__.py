@@ -127,6 +127,23 @@ def _arm_definition(config: dict[str, Any], arm: str) -> Any:
     return [digest(canonical_model_spec(lineup[n])) for n in members or []]
 
 
+def _check_panels(panels: dict[tuple[str, str], list[tuple[str | None, str]]]) -> None:
+    """A persona-conditioned focal model or arm joined across runs must use
+    one persona panel. Two differently named arms may use different panels:
+    the panel is then part of what differs between their counterparts."""
+    for (kind, name), seen in panels.items():
+        if len(seen) < 2:
+            continue
+        missing = [out for d, out in seen if d is None]
+        if missing:
+            raise ValueError(f"{kind} {name!r} is persona-conditioned in several runs, but "
+                             f"{missing[0]} does not record its persona panel; "
+                             "re-run it to join them")
+        if len({d for d, _ in seen}) > 1:
+            raise ValueError(f"{kind} {name!r} uses a different persona panel in "
+                             f"{seen[0][1]} and {next(o for d, o in seen if d != seen[0][0])}")
+
+
 def build_report(*out_dirs: str | Path,
                  margins: dict[str, float] | None = None) -> dict[str, Any]:
     margins = margins or {}
@@ -139,7 +156,10 @@ def build_report(*out_dirs: str | Path,
     spend = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
     arm_defs: dict[str, tuple[Any, str]] = {}
     focal_defs: dict[str, tuple[str, str]] = {}
-    persona_defs: dict[str, tuple[str, str]] = {}
+    # Which persona panel each persona-conditioned focal model and arm drew
+    # from, per run: the same seed must get the same persona wherever one
+    # name is joined across runs.
+    panels: dict[tuple[str, str], list[tuple[str | None, str]]] = defaultdict(list)
     for out_dir in out_dirs:
         out = Path(out_dir)
         run, rows = load_manifest(out)
@@ -153,14 +173,12 @@ def build_report(*out_dirs: str | Path,
             if prior[0] != definition:
                 raise ValueError(f"focal model {focal!r} is configured differently in "
                                  f"{prior[1]} and {out}")
+            if (lineup.get(focal) or {}).get("persona"):
+                panels[("focal model", focal)].append((run.get("persona_digest"), str(out)))
         for arm in {c["arm"] for c in rows if c["status"] == "done"}:
             members = _arm_members(run["config"], arm)
-            if any(lineup.get(n, {}).get("persona") for n in members) and run.get("persona_digest"):
-                # The same seed must get the same persona in every run of this arm.
-                seen = persona_defs.setdefault(arm, (run["persona_digest"], str(out)))
-                if seen[0] != run["persona_digest"]:
-                    raise ValueError(f"arm {arm!r} uses a different persona panel in "
-                                     f"{seen[1]} and {out}")
+            if any(lineup.get(n, {}).get("persona") for n in members):
+                panels[("arm", arm)].append((run.get("persona_digest"), str(out)))
             definition = _arm_definition(run["config"], arm)
             prior = arm_defs.setdefault(arm, (definition, str(out)))
             if prior[0] != definition:
@@ -191,6 +209,7 @@ def build_report(*out_dirs: str | Path,
                     text = entry.counterpart_opening(lines)
                     if text:
                         openings[(c["focal"], c["arm"])][c["seed"]] = text
+    _check_panels(panels)
     entry = envs.get(env_name)
     arms = _arm_order(runs, {k[2] for k in cells})
     focals = list(dict.fromkeys(f for run in runs for f in run["config"]["focal_models"]))

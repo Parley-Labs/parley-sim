@@ -257,21 +257,43 @@ def test_old_manifests_and_explicit_defaults_join_but_real_differences_do_not(tm
         build_report(tmp_path / "a", tmp_path / "c")
 
 
-def test_report_refuses_a_persona_arm_built_from_different_panels(tmp_path):
+def _persona_runs(tmp_path, panels, *, focal=False):
+    """Two runs on disjoint seeds joined into one report, with the focal model
+    (or the "persona" arm) marked persona-conditioned and the given panel
+    digest recorded per run (None: not recorded)."""
     import json as _json
     lineup = cfg().model_dump()["lineup"] + [
         {"name": "scripted-reasonable", "provider": "scripted", "model": "reasonable"}]
-    for name, seeds in (("b", "0:2"), ("c", "2:4")):
+    focal_name = cfg().focal_models[0]
+    marked = focal_name if focal else "scripted-reasonable"
+    for (name, seeds), panel in zip((("b", "0:2"), ("c", "2:4")), panels, strict=True):
         asyncio.run(run_matched(cfg(run_id=name, seeds=seeds, lineup=lineup,
                                     extra_arms={"persona": ["scripted-reasonable"]},
                                     run_arms=["persona"]), tmp_path / name))
-    # Mark the arm as persona-driven, with a different panel in each run.
-    for name in ("b", "c"):
         m = tmp_path / name / "manifest.jsonl"
         rows = [_json.loads(l) for l in m.read_text().splitlines()]
-        spec = next(s for s in rows[0]["config"]["lineup"] if s["name"] == "scripted-reasonable")
-        spec["persona"] = "usersim"
-        rows[0]["persona_digest"] = f"panel-{name}"
+        next(s for s in rows[0]["config"]["lineup"] if s["name"] == marked)["persona"] = "usersim"
+        if panel is not None:
+            rows[0]["persona_digest"] = panel
         m.write_text("".join(_json.dumps(r) + "\n" for r in rows))
-    with pytest.raises(ValueError, match="different persona panel"):
-        build_report(tmp_path / "b", tmp_path / "c")
+    return tmp_path / "b", tmp_path / "c"
+
+
+def test_report_refuses_a_persona_arm_built_from_different_panels(tmp_path):
+    with pytest.raises(ValueError, match="arm 'persona' uses a different persona panel"):
+        build_report(*_persona_runs(tmp_path, ["panel-b", "panel-c"]))
+
+
+def test_report_refuses_a_persona_focal_model_built_from_different_panels(tmp_path):
+    with pytest.raises(ValueError, match=r"focal model .* uses a different persona panel"):
+        build_report(*_persona_runs(tmp_path, ["panel-b", "panel-c"], focal=True))
+
+
+def test_report_refuses_a_persona_join_without_recorded_panels(tmp_path):
+    with pytest.raises(ValueError, match="does not record its persona panel"):
+        build_report(*_persona_runs(tmp_path, ["panel-b", None]))
+
+
+def test_report_joins_persona_runs_on_the_same_panel(tmp_path):
+    report = build_report(*_persona_runs(tmp_path, ["panel-x", "panel-x"]))
+    assert "persona" in report["arms"]

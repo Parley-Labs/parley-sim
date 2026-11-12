@@ -62,6 +62,13 @@ persona_file: ~/.cache/parley-sim/usersim-en_US.parquet
 `configs/equiv-sd3.yaml` is a full example, alongside plain LLM and scripted
 arms on the same seeds. Only `en_US` personas are supported so far.
 
+Each seed's persona is drawn from the panel, so the run records a digest of
+the panel's contents. Resuming into a directory built from another panel is
+refused, and so is a report that joins one persona arm (or a persona-conditioned
+focal model) across runs whose panels differ or weren't recorded.
+Differently named arms may use different panels; the panel is then part of
+what differs between them.
+
 Persona prompts are longer, so expect more input tokens per episode: in our
 runs, about 19.6k against 11.3k for the same customer without a persona.
 
