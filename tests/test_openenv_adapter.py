@@ -345,11 +345,12 @@ def test_served_sessions_close_their_clients():
             ws.send_text(json.dumps({"type": "reset", "data": {"seed": 1}}))
             assert ws.receive_json()["type"] == "observation"
             ws.send_text(json.dumps({"type": "close"}))  # what OpenEnv's client sends
-        # The server tears the session down on its own loop after the close;
-        # wait while that loop still runs (leaving TestClient stops it).
-        deadline = time.monotonic() + 5
-        while made[-1]._client.closed == 0 and time.monotonic() < deadline:
-            time.sleep(0.02)
+            # The server tears the session down after the close message. Wait with
+            # the socket still open: leaving the block disconnects, and TestClient
+            # then cancels the server handler, which can cut OpenEnv's teardown short.
+            deadline = time.monotonic() + 10
+            while made[-1]._client.closed == 0 and time.monotonic() < deadline:
+                time.sleep(0.02)
     assert len(made) == 2 and made[1].calls == 1  # the startup check, then the session
     assert [c._client.closed for c in made] == [1, 1]
 
