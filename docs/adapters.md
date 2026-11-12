@@ -235,12 +235,13 @@ spends your provider keys, so expose it only on a trusted network.
 `uv run --project . server`, run from `integrations/openenv/parley_sim_env`
 (`--project .` is the current directory), binds to localhost by default. Idle
 sessions close after `PARLEY_SESSION_TIMEOUT` seconds (default 600), so
-abandoned sessions can't hold every slot. The server refuses to start if that
-is shorter than a whole `reset` or `step` can take: two attempts of each
-seated model counterpart's `timeout_s`, since every counterpart may decide
-before control returns to your seat. Otherwise the idle check could close a
-session in the middle of a step. An environment where a seat acts more than
-once per turn needs more; leave room for your own model's time per turn too. OpenEnv 0.12 counts idle
+abandoned sessions can't hold every slot. The idle check could otherwise close
+a session in the middle of a `reset` or `step`, so the server refuses to start
+if the timeout is shorter than two attempts of each seated model counterpart's
+`timeout_s`. That is a lower bound: it assumes each counterpart decides once
+before control returns to your seat, and an environment where a seat acts
+several times in a row needs more. Leave room for your own model's time per
+turn too. OpenEnv 0.12 counts idle
 time from the end of the last `reset` or `step`, not its start, so a step sent
 just before the deadline can still be closed while a counterpart is
 answering: keep the timeout well above the longest pause between your
@@ -289,7 +290,7 @@ The server reads its configuration from environment variables:
 | `PARLEY_REWARD_METRIC` | `focal_surplus_share` | Which episode metric is the reward |
 | `PARLEY_MAX_REFUSALS` | `3` | Stop a session after this many provider refusals |
 | `MAX_CONCURRENT_ENVS` | `8` | Concurrent sessions |
-| `PARLEY_SESSION_TIMEOUT` | `600` | Close sessions idle this many seconds; at least 2 × the sum of the seated model counterparts' `timeout_s` |
+| `PARLEY_SESSION_TIMEOUT` | `600` | Close sessions idle this many seconds; at least 2 × the sum of the seated model counterparts' `timeout_s`, more if a seat acts several times per turn |
 | `PARLEY_RELEASE_TRACE` | `after_done` | `after_done`: full trace in `state()` once an episode is done; `never`: focal view plus outcomes and metrics only |
 | `PARLEY_SEED_SECRET` | none | Keys requested seeds into scenario seeds, so a client can't compute a scenario from its seed; use with `PARLEY_RELEASE_TRACE=never` ([seeds and secrecy](concepts.md#seeds-and-secrecy)) |
 
