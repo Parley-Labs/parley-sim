@@ -49,15 +49,27 @@ def cmd_smoke(args: argparse.Namespace) -> int:
     return 1 if problems or errored else 0
 
 
+def halt_summary(manifest: Path) -> tuple[str, list[dict]] | None:
+    """(reason, cells that did not run) if the run halted, else None. The
+    run-level halt row gives the reason; only cell rows are counted."""
+    rows = [json.loads(l) for l in manifest.read_text().splitlines() if l.strip()]
+    halt = next((r for r in rows if r["type"] == "halt"), None)
+    halted = [r for r in rows if r["type"] == "cell" and (
+        r["status"] == "skipped_halted" or "ProviderHalted" in (r.get("error") or ""))]
+    if halt is None and not halted:
+        return None
+    reason = (halt or {}).get("reason") or next(
+        (r["error"] for r in halted if r.get("error")), "unknown")
+    return reason, halted
+
+
 def cmd_matched(args: argparse.Namespace) -> int:
     manifest = asyncio.run(run_matched(load_config(args.config), args.out))
     print(render(build_report(args.out)))
     print(f"manifest: {manifest}")
-    halted = [json.loads(l) for l in manifest.read_text().splitlines()
-              if '"skipped_halted"' in l or "ProviderHalted" in l or '"type": "halt"' in l]
-    if halted:
-        reason = next((r.get("reason") or r.get("error") for r in halted
-                       if r.get("reason") or r.get("error")), "unknown")
+    summary = halt_summary(manifest)
+    if summary is not None:
+        reason, halted = summary
         print(f"\nRUN HALTED to protect the provider account: {reason}\n"
               f"{len(halted)} cells did not run. Find the cause before re-running.")
         return 2

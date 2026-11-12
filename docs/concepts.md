@@ -87,8 +87,8 @@ A difference can exclude zero and still not count, if it is no larger than
 the noise floor. Set margins before you look at the data: the bundled
 `configs/equiv-sd3.yaml` shows a pre-registered plan.
 
-The means table uses every completed episode of each arm, while comparisons
-use only seeds both arms completed. If an arm lost episodes to errors, the
+The means table uses every completed replicate-0 episode of each arm, while
+comparisons use only seeds both arms completed. If an arm lost episodes to errors, the
 two can disagree; the report states the episode count per arm.
 
 ## Metric kinds

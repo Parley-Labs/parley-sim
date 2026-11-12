@@ -144,3 +144,15 @@ def test_export_takes_every_rare_label(tmp_path):
     labels = [r["auto_label"] for r in rows]
     assert labels.count("understated") == 3 and labels.count("none") == 3
     assert all(int(r["label_total_in_run"]) >= 1 for r in rows)
+
+
+def test_weighted_agreement_needs_every_sampled_label_labelled(tmp_path):
+    key = tmp_path / "k.csv"
+    blind = tmp_path / "b.csv"
+    key.write_text("id,auto_label,arm,label_model,label_total_in_run\n"
+                   "1,understated,aoc,m,10\n2,none,aoc,m,100\n3,accurate,aoc,m,50\n")
+    blind.write_text("id,limit_discount_pct,limit_credit_usd,sentence,human_label\n"
+                     "1,30,50,s,understated\n2,30,50,s,none\n3,30,50,s,\n")
+    assert claims_kappa(blind, key)["weighted_to_pool"] is None
+    blind.write_text(blind.read_text().replace("3,30,50,s,\n", "3,30,50,s,accurate\n"))
+    assert claims_kappa(blind, key)["weighted_to_pool"]["precision_understated"] == 1.0

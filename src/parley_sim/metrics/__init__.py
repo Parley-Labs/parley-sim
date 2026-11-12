@@ -111,11 +111,11 @@ def _arm_definition(config: dict[str, Any], arm: str) -> Any:
     """What fills the counterpart seats in `arm`: policy names for soc, the
     lineup specs of its members for model arms."""
     if arm == "soc":
-        return sorted(config["scripted_counterparts"])
+        return list(config["scripted_counterparts"])  # order sets the rotation across seeds
     members = (config.get("extra_arms") or {}).get(arm) if arm != "aoc" \
         else config["adaptive_counterparts"]
     lineup = {m["name"]: m for m in config["lineup"]}
-    return sorted(digest(lineup[n]) for n in members or [])
+    return [digest(lineup[n]) for n in members or []]
 
 
 def build_report(*out_dirs: str | Path,
@@ -434,7 +434,10 @@ def claims_kappa(blind_csv: str | Path, key_csv: str | Path) -> dict[str, Any]:
     a, h = [p[0] for p in pairs], [p[1] for p in pairs]
     confusion = {x: {y: sum(1 for p in pairs if p == (x, y)) for y in CLAIM_LABELS}
                  for x in CLAIM_LABELS}
-    weighted = _weighted_bluff_agreement(pairs, totals) if totals else None
+    # Every sampled rule label must have labelled rows, or the reweighting
+    # would silently describe only part of the pool.
+    complete = bool(totals) and set(totals) <= {auto_label for auto_label, _ in pairs}
+    weighted = _weighted_bluff_agreement(pairs, totals) if complete else None
     return {"n": len(pairs), "invalid": invalid, "weighted_to_pool": weighted,
             "kappa_understated": cohen_kappa(["understated" if x == "understated" else "other"
                                               for x in a],

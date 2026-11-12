@@ -201,3 +201,17 @@ def test_unsafe_or_invalid_tasks_fail_at_seed(env, seats, cfg, reason):
     res = asyncio.run(server.run_request(req))
     assert res.failure is not None and res.failure.stage == "seed"
     assert reason in res.failure.failure_reason and client.calls == []
+
+
+def test_registered_env_names_with_a_colon_are_allowed():
+    from parley_sim import envs
+    envs.register("vendor:desk", envs.get("support_desk"))
+    server, _ = _server({"focal": accept_if_offered})
+    req = ParleySimEpisodeRequest(
+        episode_id=EpisodeId(rollout_id="rollout"),
+        task=MaterializedTask(task_id=TaskId(taskset="parley:support_desk", task_id="s3"),
+                              task_input=ParleySimTaskInput(
+                                  seed=3, seats={"agent": "model:focal", "customer": "policy:conceder"},
+                                  env="vendor:desk")))
+    res = asyncio.run(server.run_request(req))
+    assert res.failure is None and res.result.status == "complete"

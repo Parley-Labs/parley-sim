@@ -234,7 +234,8 @@ class ParleySimEnvironmentServer(
                   cleanup: CleanupContext) -> ParleySimEpisodeResponse:
         task = request.task.task_input
         try:
-            if ":" in task.env and task.env not in self.config.allowed_env_paths:
+            if (":" in task.env and task.env not in envs.registry()
+                    and task.env not in self.config.allowed_env_paths):
                 raise ValueError(f"env {task.env!r} is an import path not in allowed_env_paths")
             entry = envs.get(task.env)
             if self.config.reward_metric not in entry.metric_kinds:

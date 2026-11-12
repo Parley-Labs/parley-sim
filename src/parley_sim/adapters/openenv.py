@@ -150,11 +150,25 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
                 raise ValueError(f"seat {seat!r}: label {label!r} must start with "
                                  "'policy:' or 'model:'")
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._closed = False
         self.text = self.entry.text()
         self._episode: Episode | None = None
         self._pending: DecisionRequest | None = None
         self._counterparts: dict[Seat, ModelSeat | ScriptedSeat] = {}
         self._state = ParleySimState()
+
+    def close(self) -> None:
+        """Called by OpenEnv when a session ends or is reaped for idleness.
+        After this, reset and step are refused, so a connection whose slot
+        was released can make no further episodes or provider calls."""
+        self._closed = True
+        self._episode, self._pending = None, None
+        if self._loop is not None and not self._loop.is_closed() and not self._loop.is_running():
+            self._loop.close()
+
+    def _check_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("this session was closed (ended or idle too long); open a new one")
 
     def _run(self, coro: Any) -> Any:
         """Run a coroutine for the synchronous API on one persistent loop, so
@@ -174,6 +188,7 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
 
     async def reset_async(self, seed: int | None = None, episode_id: str | None = None,
                           arm: str | None = None, **kwargs: Any) -> ParleySimObservation:
+        self._check_open()
         seed = 0 if seed is None else int(seed)
         spec = EpisodeSpec(seed=seed, seats=self.seats, config=self.env_config,
                            focal_seat=self.focal, arm=arm, cell_key=episode_id)
@@ -202,6 +217,7 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
 
     async def step_async(self, action: ParleySimAction, timeout_s: float | None = None,
                          **kwargs: Any) -> ParleySimObservation:
+        self._check_open()
         if self._episode is None or self._pending is None:
             raise RuntimeError("call reset() before step(), and not after the episode ends")
         req, self._pending = self._pending, None
@@ -227,7 +243,10 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
         if self._episode is not None:
             lines = self._episode.lines
             if self._episode.result is None:  # mid-episode: only what the focal seat can see
-                lines = [l for l in lines if l["type"] == "event"
+                # A decision's `context` is evaluation data (it can hold the
+                # counterpart's valuation of a standing offer), so it is left out.
+                lines = [l if l["type"] == "event" else {k: v for k, v in l.items() if k != "context"}
+                         for l in lines if l["type"] == "event"
                          or (l["type"] == "decision" and l["seat"] == self.focal)]
             self._state.trace = list(lines)
         return self._state

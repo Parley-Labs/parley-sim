@@ -73,6 +73,9 @@ class AnthropicClient:
     def __init__(self, spec: ModelSpec):
         import anthropic
         self.spec = spec
+        if spec.base_url and not spec.api_key_env:
+            raise ValueError(f"{spec.name}: a custom base_url needs api_key_env, so "
+                             "ANTHROPIC_API_KEY is never sent to another host")
         env = spec.api_key_env or "ANTHROPIC_API_KEY"
         if spec.api_key_env and not os.environ.get(env):
             raise RuntimeError(f"{env} is not set")  # never fall back to ANTHROPIC_API_KEY
@@ -115,7 +118,11 @@ class OpenAIClient:
         # A key must only ever reach the host it belongs to: an OpenAI key goes
         # to a custom base_url only when named explicitly, and a gateway key
         # never goes to OpenAI's default endpoint.
-        if spec.provider == "openai" and spec.base_url and not spec.api_key_env:
+        # The OpenAI SDK reads OPENAI_BASE_URL when no base_url is given, so
+        # guard the endpoint the client will actually use.
+        base_url = spec.base_url or (os.environ.get("OPENAI_BASE_URL") or None
+                                     if spec.provider == "openai" else None)
+        if spec.provider == "openai" and base_url and not spec.api_key_env:
             raise ValueError(f"{spec.name}: provider 'openai' with a custom base_url needs "
                              "api_key_env, so OPENAI_API_KEY is never sent to another host")
         if spec.provider == "openai_compat" and not spec.base_url:
@@ -128,7 +135,7 @@ class OpenAIClient:
             # OpenAI secret to whatever gateway base_url points at. Behind a
             # proxy that injects the real key, any placeholder value works.
             raise RuntimeError(f"{env} is not set")
-        self._client = AsyncOpenAI(base_url=spec.base_url, api_key=key)
+        self._client = AsyncOpenAI(base_url=base_url, api_key=key)
 
     async def complete(self, *, system: str, user: str, schema: JSON) -> tuple[Any, JSON]:
         compat = self.spec.provider != "openai"
