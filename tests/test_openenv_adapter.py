@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 import logging
 
 import pytest
@@ -250,15 +251,18 @@ def test_any_parse_failure_is_a_strike(monkeypatch):
     obs = env.step(ParleySimAction(text=deep))
     assert obs.last_strike == "malformed_output" and not obs.done
 
-    def odd(payload):
-        raise TypeError("odd payload")
-    monkeypatch.setattr(env.text, "parse", odd)
-    assert env.step(ParleySimAction(text=OK_REPLY)).last_strike == "malformed_output"
-    monkeypatch.undo()
+    # Whether that nesting overflows depends on the Python version (3.14's json
+    # parser copes), so raise each failure type directly as well.
+    for exc in (RecursionError("too deep"), TypeError("odd payload")):
+        def fail(payload, exc=exc):
+            raise exc
+        monkeypatch.setattr(env.text, "parse", fail)
+        assert env.step(ParleySimAction(text=OK_REPLY)).last_strike == "malformed_output"
+        monkeypatch.undo()
     assert env.step(ParleySimAction(text=OK_REPLY)).last_strike is None
     details = [d["detail"] for d in focal_decisions(env)]
-    assert details[0].startswith("RecursionError") and details[1] == "TypeError: odd payload"
-    assert details[2] is None and env.state.step_count == 3
+    assert details[1:] == ["RecursionError: too deep", "TypeError: odd payload", None]
+    assert env.state.step_count == 4
 
 
 def test_unexpected_step_error_keeps_the_request_pending(monkeypatch):
@@ -338,6 +342,12 @@ def test_served_sessions_close_their_clients():
         with client.websocket_connect("/ws") as ws:
             ws.send_text(json.dumps({"type": "reset", "data": {"seed": 1}}))
             assert ws.receive_json()["type"] == "observation"
+            ws.send_text(json.dumps({"type": "close"}))  # what OpenEnv's client sends
+        # The server tears the session down on its own loop after the close;
+        # wait while that loop still runs (leaving TestClient stops it).
+        deadline = time.monotonic() + 5
+        while made[-1]._client.closed == 0 and time.monotonic() < deadline:
+            time.sleep(0.02)
     assert len(made) == 2 and made[1].calls == 1  # the startup check, then the session
     assert [c._client.closed for c in made] == [1, 1]
 
