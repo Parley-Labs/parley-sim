@@ -80,7 +80,7 @@ The server reads its configuration from environment variables:
 | `PARLEY_REWARD_METRIC` | `focal_surplus_share` | Which episode metric is the reward. |
 | `PARLEY_MAX_REFUSALS` | `3` | Stop a session after this many provider refusals. |
 | `MAX_CONCURRENT_ENVS` | `8` | Concurrent sessions. |
-| `PARLEY_SESSION_TIMEOUT` | `600` | Close sessions idle this many seconds. Must cover a whole reset or step: at least twice the sum of the seated model counterparts' `timeout_s`, or the server refuses to start. |
+| `PARLEY_SESSION_TIMEOUT` | `600` | Close sessions idle this many seconds. Must cover a whole reset or step. The server refuses to start below twice the sum of the seated model counterparts' `timeout_s`; allow more if a seat can act several times per turn. |
 | `PARLEY_SEED_SECRET` | none | Keys requested seeds into scenario seeds, so a client can't compute a scenario from its seed. Use with `PARLEY_RELEASE_TRACE=never`. |
 | `PARLEY_RELEASE_TRACE` | `after_done` | `after_done`: `env.state()` carries the full trace once an episode is done. `never`: it only ever shows what your model's seat saw, plus the outcomes and metrics. Any other value fails startup. |
 

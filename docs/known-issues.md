@@ -102,7 +102,9 @@ one, and the first session kept stepping.
   `_advance` checks after every counterpart call, so a session reaped mid-step
   ends its episode with a "closed" error instead of returning an observation,
   and every later message on that connection gets the same error.
-- The server refuses to start when `PARLEY_SESSION_TIMEOUT` is shorter than a
-  whole `reset` or `step` can take (two attempts of every seated model
-  counterpart's `timeout_s`), and the docs say to keep it well above the
-  longest pause between steps plus the longest whole `reset` or `step`.
+- The server refuses to start when `PARLEY_SESSION_TIMEOUT` is shorter than
+  two attempts of every seated model counterpart's `timeout_s`. That is a
+  lower bound: it assumes each counterpart decides once per `reset` or `step`,
+  and an environment where a seat acts several times in a row needs more. The
+  docs say to keep the timeout well above the longest pause between steps plus
+  the longest whole `reset` or `step`.

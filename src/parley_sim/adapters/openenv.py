@@ -502,8 +502,9 @@ def create_parley_app(*, max_concurrent_envs: int = 8, session_timeout_s: float 
     if session_timeout_s is not None and session_timeout_s < needed:
         raise ValueError(
             f"session timeout {session_timeout_s:g}s (PARLEY_SESSION_TIMEOUT) is shorter than "
-            f"one reset or step can take ({needed:g}s: two attempts of each seated model "
-            "counterpart's timeout_s), so a session could be closed as idle mid-step. Raise "
+            f"the {needed:g}s a reset or step can take when each seated model counterpart "
+            "decides once (two attempts of its timeout_s), so a session could be closed as "
+            "idle mid-step. Raise "
             f"the session timeout to at least {needed:g}s, or lower timeout_s in the lineup.")
     if environment_kwargs.get("seed_secret") and \
             environment_kwargs.get("release_trace", "after_done") != "never":
