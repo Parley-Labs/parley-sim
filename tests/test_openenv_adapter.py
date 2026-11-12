@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -326,6 +327,20 @@ def test_session_timeout_must_outlast_a_counterpart_decision():
     create_parley_app(**slow, client_factory=recording_factory([]), session_timeout_s=200)
     create_parley_app(**slow, client_factory=recording_factory([]), session_timeout_s=None)
     create_parley_app(seats=SCRIPTED, session_timeout_s=1)  # no model calls to outlast
+
+
+def test_session_timeout_covers_every_counterpart_in_a_turn():
+    # Each model counterpart may decide before the step returns, so the
+    # needed time adds up across counterparts rather than taking the slowest.
+    def spec(t, provider="openai_compat"):
+        return SimpleNamespace(timeout_s=t, provider=provider)
+
+    probe = SimpleNamespace(
+        focal="agent",
+        seats={"agent": "client", "a": "model:a", "b": "model:b", "c": "policy:reasonable",
+               "d": "model:s"},
+        lineup={"a": spec(100), "b": spec(30), "s": spec(999, "scripted")})
+    assert ParleySimEnvironment.max_turn_s.fget(probe) == 260
 
 
 def test_close_closes_provider_clients_once():

@@ -222,7 +222,8 @@ all its users. If you deploy with `openenv push`, pass `--no-interface`.
 `ParleySimEnv` waits up to 300 seconds for each reply (`message_timeout_s`;
 OpenEnv's default is 60), since one model counterpart turn can take two
 attempts of its `timeout_s` (120 seconds by default). Raise it if you raise
-`timeout_s`. A focal reply may be up to 65,536 characters; a structured `move`
+`timeout_s` or seat more than one model counterpart, since a reply waits for
+all of them. A focal reply may be up to 65,536 characters; a structured `move`
 keeps only the keys the action schema declares.
 
 The configuration (seat labels, lineup names, policies, reward metric,
@@ -235,13 +236,15 @@ spends your provider keys, so expose it only on a trusted network.
 (`--project .` is the current directory), binds to localhost by default. Idle
 sessions close after `PARLEY_SESSION_TIMEOUT` seconds (default 600), so
 abandoned sessions can't hold every slot. The server refuses to start if that
-is shorter than twice the largest `timeout_s` of a seated lineup model, since
-the idle check could otherwise close a session in the middle of a step; leave
-room for your own model's time per turn as well. OpenEnv 0.12 counts idle
+is shorter than a whole `reset` or `step` can take: two attempts of each
+seated model counterpart's `timeout_s`, since every counterpart may decide
+before control returns to your seat. Otherwise the idle check could close a
+session in the middle of a step. An environment where a seat acts more than
+once per turn needs more; leave room for your own model's time per turn too. OpenEnv 0.12 counts idle
 time from the end of the last `reset` or `step`, not its start, so a step sent
 just before the deadline can still be closed while a counterpart is
 answering: keep the timeout well above the longest pause between your
-client's steps plus one counterpart decision. Only `reset` and `step` count
+client's steps plus the longest whole `reset` or `step`. Only `reset` and `step` count
 as activity; a client that only polls `state()` is closed as idle. OpenEnv
 0.12 also frees a reaped session's slot while its connection is still open;
 parley-sim closes the environment, so that connection only gets errors.
@@ -286,7 +289,7 @@ The server reads its configuration from environment variables:
 | `PARLEY_REWARD_METRIC` | `focal_surplus_share` | Which episode metric is the reward |
 | `PARLEY_MAX_REFUSALS` | `3` | Stop a session after this many provider refusals |
 | `MAX_CONCURRENT_ENVS` | `8` | Concurrent sessions |
-| `PARLEY_SESSION_TIMEOUT` | `600` | Close sessions idle this many seconds; at least 2 × the largest seated `timeout_s` |
+| `PARLEY_SESSION_TIMEOUT` | `600` | Close sessions idle this many seconds; at least 2 × the sum of the seated model counterparts' `timeout_s` |
 | `PARLEY_RELEASE_TRACE` | `after_done` | `after_done`: full trace in `state()` once an episode is done; `never`: focal view plus outcomes and metrics only |
 | `PARLEY_SEED_SECRET` | none | Keys requested seeds into scenario seeds, so a client can't compute a scenario from its seed; use with `PARLEY_RELEASE_TRACE=never` ([seeds and secrecy](concepts.md#seeds-and-secrecy)) |
 

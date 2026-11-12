@@ -255,12 +255,16 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
         self._state = ParleySimState()
 
     @property
-    def max_decision_s(self) -> float:
-        """Longest one counterpart decision can take: two attempts of the
-        slowest seated model's timeout_s (0 with no model counterparts)."""
+    def max_turn_s(self) -> float:
+        """Longest a reset or step can take if every seated model counterpart
+        decides once before control returns to the focal seat: two attempts of
+        each one's timeout_s (0 with no model counterparts). OpenEnv records no
+        activity until the reset or step returns, so the idle timeout must
+        cover this; an environment where a seat acts more than once per focal
+        turn needs proportionally more."""
         models = [self.lineup[label.split(":", 1)[1]] for seat, label in self.seats.items()
                   if seat != self.focal and label.startswith("model:")]
-        return 2 * max((m.timeout_s for m in models if m.provider != "scripted"), default=0.0)
+        return 2 * sum(m.timeout_s for m in models if m.provider != "scripted")
 
     def close(self) -> None:
         """Called by OpenEnv when a session ends or is reaped for idleness.
@@ -488,19 +492,19 @@ def create_parley_app(*, max_concurrent_envs: int = 8, session_timeout_s: float 
     outside the session limit. The Gradio web interface is never mounted,
     whatever ENABLE_WEB_INTERFACE says, because it shares one environment
     between all its users. Idle sessions are closed after `session_timeout_s`,
-    which must cover two attempts of the slowest model counterpart's
-    timeout_s. The server has no authentication of its own."""
+    which must cover a whole reset or step: two attempts of every seated model
+    counterpart's timeout_s. The server has no authentication of its own."""
     probe = ParleySimEnvironment(**environment_kwargs)  # validate the configuration at startup
     try:
-        needed = probe.max_decision_s
+        needed = probe.max_turn_s
     finally:
         probe.close()
     if session_timeout_s is not None and session_timeout_s < needed:
         raise ValueError(
             f"session timeout {session_timeout_s:g}s (PARLEY_SESSION_TIMEOUT) is shorter than "
-            f"one counterpart decision can take ({needed:g}s: two attempts of the slowest "
-            "model's timeout_s), so a session could be closed as idle mid-step. Raise the "
-            f"session timeout to at least {needed:g}s, or lower timeout_s in the lineup.")
+            f"one reset or step can take ({needed:g}s: two attempts of each seated model "
+            "counterpart's timeout_s), so a session could be closed as idle mid-step. Raise "
+            f"the session timeout to at least {needed:g}s, or lower timeout_s in the lineup.")
     if environment_kwargs.get("seed_secret") and \
             environment_kwargs.get("release_trace", "after_done") != "never":
         _log.warning("seed_secret is set but traces are released after each episode: a client "
@@ -538,7 +542,8 @@ class ParleySimEnv(EnvClient[ParleySimAction, ParleySimObservation, ParleySimSta
     """OpenEnv client for a parley-sim server. It waits up to
     `message_timeout_s` (default 300 s; OpenEnv's own default is 60 s) for each
     reply, since one counterpart decision can take two attempts of the model's
-    timeout_s (120 s each by default). Raise it if you raise timeout_s."""
+    timeout_s (120 s each by default). Raise it if you raise timeout_s or seat
+    more than one model counterpart: a reply waits for all of them."""
 
     def __init__(self, base_url: str | None = None, connect_timeout_s: float = 10.0,
                  message_timeout_s: float = DEFAULT_MESSAGE_TIMEOUT_S, **kwargs: Any):
