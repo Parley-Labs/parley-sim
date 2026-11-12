@@ -17,6 +17,14 @@ environment (`support_desk`, a retention negotiation), a tested example of a
 custom environment (`examples/haggle.py`), and adapters for NeMo Gym and
 OpenEnv.
 
+## Where to leave comments
+
+Comment on any line of the framework in the review-only pull request
+[#2](https://github.com/Parley-Labs/parley-sim/pull/2): every file of code,
+tests, docs and configs shows there as added, so nothing is limited to what
+changed recently. [#1](https://github.com/Parley-Labs/parley-sim/pull/1) holds
+the same code and is the one that will be merged; #2 is never merged.
+
 ## Setup (about 5 minutes, no API keys)
 
 ```bash
@@ -145,6 +153,7 @@ Found and deliberately not changed (tell us if you disagree):
 
 ## How to send feedback
 
-Open an issue or comment on the pull request. For each point, the file and
+Comment on the lines in [#2](https://github.com/Parley-Labs/parley-sim/pull/2),
+or open an issue for anything broader. For each point, the file and
 line, what you saw, and how to reproduce it is ideal, but a rough note is
 welcome too.
