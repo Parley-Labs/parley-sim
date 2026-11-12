@@ -10,9 +10,16 @@ while not isinstance(event, EpisodeComplete):
 ```
 
 The local runner, the NeMo Gym server and the OpenEnv environment are each a
-thin loop around that call, so an episode behaves the same, and writes the
-same trace, wherever it runs. Both adapters work with any environment
-parley-sim can load, including [your own](custom-environments.md).
+thin loop around that call, so the rules, scenarios, scripted counterparts and
+trace format are the same wherever an episode runs. Both adapters work with
+any environment parley-sim can load, including
+[your own](custom-environments.md). How seat failures are handled differs:
+
+| | Local runner | NeMo Gym | OpenEnv |
+| --- | --- | --- | --- |
+| Malformed reply from a model seat | One retry, then a strike | One retry, then a strike | Focal seat: a strike at once (your client owns retries); counterparts: as local |
+| Timeout or provider error | Strike, fallback move | The episode fails (retryable per Gym's rules) | Counterparts: strike, fallback move |
+| Refusal breaker scope | The whole run | One episode | One session (all its episodes) |
 
 Status: both adapters are covered by unit tests against the pinned library
 versions. The OpenEnv package has also been built as a Docker image and
@@ -22,8 +29,8 @@ welcome.
 
 ## NeMo Gym
 
-`pip install "parley-sim[gym]"`, targeting nemo-gym 0.7 (Python 3.13.14 or
-newer, as nemo-gym requires).
+Install the `gym` extra from a checkout (`uv sync --extra gym --extra openai`),
+targeting nemo-gym 0.7 (Python 3.13.14 or newer, as nemo-gym requires).
 
 One Gym `/run` is one parley-sim episode. Scripted seats run in-process.
 Every model seat's turn goes to a Gym agent server through an agent session;
@@ -77,15 +84,33 @@ Each task row is one episode:
 To compare arms, write task rows for the same seeds with each kind of
 counterpart, and give the matching rows the same `pair_key`.
 
+Task rows can name only built-in, registered or entry-point environments. An
+import path (`my_pkg.envs:ENTRY`) in a task row is refused unless the server
+config lists it under `allowed_env_paths`, because loading one imports and
+runs code named by the task data. The reward metric is checked against the
+environment's metrics, and a task with an unknown one fails at seeding rather
+than scoring 0.
+
 ## OpenEnv
 
-`pip install "parley-sim[openenv]"`, targeting openenv 0.12.
+Install the `openenv` extra from a checkout (`uv sync --extra openenv
+--extra openai`), targeting openenv 0.12.
 
 Your client (a trainer such as TRL's GRPOTrainer, or a script) plays the
 focal seat through `reset` and `step`. Counterparts, scripted or model, run
-inside the environment, and the full trace, including every counterpart
-decision, is exposed through `state()`, so opponent behavior is never hidden
-in the container.
+inside the environment. While an episode runs, `state()` shows only what the
+focal seat can see; once it ends, the full trace, including the scenario,
+ground truth and every counterpart decision, is released, so opponent
+behavior is never hidden in the container and never leaked mid-episode.
+
+The configuration (seat labels, lineup names, policies, reward metric,
+provider keys) is checked when the server starts, so a typo fails startup
+instead of every reset.
+
+The server has no authentication, and with model counterparts every session
+spends your provider keys. `uv run --project . server` binds to localhost by
+default. Idle sessions close after `PARLEY_SESSION_TIMEOUT` seconds (default
+600), so abandoned sessions can't hold every slot.
 
 A ready-to-build package is in
 [`integrations/openenv/parley_sim_env`](../integrations/openenv/parley_sim_env/README.md),
@@ -121,6 +146,7 @@ The server reads its configuration from environment variables:
 | `PARLEY_REWARD_METRIC` | `focal_surplus_share` | Which episode metric is the reward |
 | `PARLEY_MAX_REFUSALS` | `3` | Stop a session after this many provider refusals |
 | `MAX_CONCURRENT_ENVS` | `8` | Concurrent sessions |
+| `PARLEY_SESSION_TIMEOUT` | `600` | Close sessions idle this many seconds |
 
 Provider keys for model counterparts are read from the container's
 environment at runtime (`docker run -e OPENROUTER_API_KEY ...`); never bake

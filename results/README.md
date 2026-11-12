@@ -12,6 +12,12 @@ pinned to Anthropic, at low reasoning effort.
 Both use seeds 1060 to 1099, so `family-sd4`'s arms join `equiv-sd3`'s in
 [`joint-report.md`](family-sd4/joint-report.md).
 
+**The main metric.** `focal_surplus_share` is the agent's surplus (its value
+for the deal minus its value for no deal) divided by the most surplus it could
+have achieved in a deal both sides would accept. 0.68 means the agent got 68%
+of what it could have. It can exceed 1 when the counterpart accepts a deal
+below its own walk-away value (one episode in these runs).
+
 ## equiv-sd3 (pre-registered)
 
 The analysis plan is the header of its config, committed before any episode
@@ -21,12 +27,24 @@ persona (`usersim`), and plain Claude (`aoc`). Margins: 0.08 surplus share,
 
 | Hypothesis | Result |
 | --- | --- |
-| H1: plain and persona customers give equivalent agent outcomes | Supported for both agents. Surplus share differed by +0.008 (Opus) and +0.022 (Sonnet), 90% intervals inside ±0.08; turns inside ±0.8 |
-| H2: persona customers behave more variedly | Supported for both agents. First-offer spread 0.26 to 0.29 against 0 for plain customers; opening-message wording more varied (permutation p < 0.001) |
-| H3: both LLM arms differ from scripted on surplus share | Partly. Plain LLM vs scripted is different (+0.11 Opus, +0.10 Sonnet). Persona vs scripted (+0.105, +0.080) excludes zero but sits just under the noise floor, so it is inconclusive |
+| H1: plain and persona customers give equivalent agent outcomes | **Supported** for both agents. Surplus share differed by +0.008 (Opus) and +0.022 (Sonnet), 90% intervals inside ±0.08; turns inside ±0.8 |
+| H2: persona customers behave more variedly | **Supported** for both agents. First-offer spread 0.26 to 0.29 against 0 for plain customers; opening-message wording more varied (permutation p ≈ 0.001 or below) |
+| H3: both LLM arms differ from scripted on surplus share | **Not supported as pre-registered.** Plain LLM vs scripted is different (+0.11 Opus, +0.10 Sonnet). Persona vs scripted (+0.105, +0.080) has an interval excluding zero but sits just under its noise floor (0.106, 0.082), so the rule calls it inconclusive |
 
-Every episode in every arm ended in a deal. Spend: about 5.5M input and 0.47M
-output tokens.
+Every episode in every arm ended in a deal. About 5.5M input and 0.47M output
+tokens. The Claude calls were billed to our own Anthropic key through
+OpenRouter, so the reports show $0 for them.
+
+Two caveats a reader should weigh:
+
+- **The noise floor is conservative.** It is the mean per-episode gap between
+  two replays of the same cell, not a standard error, so it doesn't shrink
+  with more seeds. H3's persona comparison misses it by 0.001 to 0.002.
+- **The margin was set from the pilot.** 0.08 was half the smallest
+  scripted-vs-LLM gap in the pilot (0.16). In this run that gap was smaller
+  (0.10 to 0.11), so 0.08 is about three quarters of it. H1's intervals still
+  sit well inside it for Opus (upper bound 0.041) and inside it for Sonnet
+  (0.065).
 
 ## family-sd4 (exploratory)
 
@@ -36,13 +54,16 @@ as plain customers, same prompt, no persona, no replicates.
 - Their first offers spread almost as widely as persona customers' (0.20 to
   0.24), where plain Claude customers never varied.
 - Their opening wording was no more varied than plain Claude's; persona
-  customers stayed clearly ahead (p ≤ 0.001).
-- The customer model moved the agent's result: against Muse, agents kept 55%
-  (Opus) and 62% (Sonnet) of the deal, against 68% and 71% with plain Claude
-  customers. Muse produced an invalid move on 26% of its turns (Nemotron on
-  none), which may explain part of that.
+  customers stayed clearly ahead (p ≈ 0.001 or below).
+- The customer model moved the agent's result: against Muse, agents' surplus
+  share was 0.55 (Opus) and 0.62 (Sonnet), against 0.68 and 0.71 with plain
+  Claude customers. Muse made an illegal move on 84 of its 345 turns (24%),
+  plus 5 turns lost to provider errors, which may explain part of that.
+  Nemotron had none. Four Sonnet episodes, two against each new customer,
+  ended without a deal.
 
-Spend: $7.60 as reported by OpenRouter.
+Spend: $7.60 reported by OpenRouter for the customer calls (Muse $6.67,
+Nemotron $0.94); the Claude agent calls were billed to our own Anthropic key.
 
 ## What is and isn't here
 
@@ -56,8 +77,9 @@ Spend: $7.60 as reported by OpenRouter.
 The `usersim` traces record each persona's trait scores from NVIDIA's persona
 dataset, and the customers' in-character messages. The dataset's licence
 covers use for developing AI, not obviously redistribution, so we leave them
-out. Their results are in the published reports; to reproduce them, build a
-panel ([personas](../docs/personas.md)) and re-run the config.
+out. Their results are in the published reports. Re-running the config with a
+freshly built panel reproduces the method, not these exact numbers, because a
+new panel draws different personas.
 
 `scripts/curate_results.py` made this folder from the full run directories.
 
@@ -68,7 +90,13 @@ uv run parley-sim report results/equiv-sd3 --margins focal_surplus_share=0.08,tu
 uv run parley-sim verify results/family-sd4/traces/*.jsonl
 ```
 
-The recomputed `equiv-sd3` report matches the published one for every
-comparison that doesn't involve the withheld arm, except the two experimental
-claim metrics (`limit_claim`, `understated_limit`). Those changed because the
-claim rules were fixed after the run ([claim metrics](../docs/claims.md)).
+The published reports were produced by the code at the time of each run.
+Recomputing with the current code matches them for every comparison that
+doesn't involve the withheld arm, with three known differences:
+
+- the experimental claim metrics (`limit_claim`, `understated_limit`) changed
+  because the claim rules were fixed after the run, and are now labelled
+  experimental ([claim metrics](../docs/claims.md));
+- the acceptance-by-offer-quality tables now leave out offers the agent wasn't
+  authorised to accept, which the published tables counted as declines;
+- the means table now states how many episodes each arm contributes.

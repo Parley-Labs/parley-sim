@@ -6,9 +6,10 @@ the `limit_claim` and `understated_limit` metrics, tagged
 `intrinsic (experimental)` in every report.
 
 **Don't quote rates from them as validated.** On held-out data labelled by
-one blind human, the rules agreed with the labeller at Cohen's kappa 0.64 for
-bluffs against everything else, catching about 38% of bluffs with 64%
-precision. Three scope bugs found in that round have since been fixed, and
+one blind human, the rules caught about 38% of bluffs with 64% precision.
+Agreement on bluffs against everything else was Cohen's kappa 0.45 once
+reweighted to the run (0.64 on the stratified sample, which over-represents
+flagged sentences). Three scope bugs found in that round have since been fixed, and
 the fixed rules have not been re-validated. The rules are also specific to
 `support_desk`.
 
@@ -52,7 +53,7 @@ limits, an empty `human_label` column, no rule output) and
 `labels/round1.key.csv` (the rules' labels). The sample is stratified: half
 is sentences the rules flagged, split across labels with rare labels taken
 whole, and half is unflagged sentences, where misses hide. The key records
-each label's total count so agreement can be reweighted to the full run.
+each label's total count in the pool so agreement can be reweighted.
 
 Sentences like "that's my maximum discount" refer to the offer made in the
 same turn: look it up in the trace (the id is `cell_key:seq:index`) before
@@ -64,7 +65,11 @@ uv run parley-sim kappa labels/round1.blind.csv labels/round1.key.csv
 ```
 
 It reports kappa for bluffs against everything else (`kappa_understated`),
-kappa over all labels (`kappa_all`), and the confusion matrix. Rows with
+kappa over all labels (`kappa_all`) and the confusion matrix, all on the
+sample, plus `weighted_to_pool`: bluff kappa, precision and recall reweighted
+from the stratified sample back to the pool it was drawn from. Quote the
+weighted figures; the sample over-represents flagged sentences. The pool is
+the run minus any sentences excluded with `--exclude`. Rows with
 invalid labels are listed and the command exits non-zero.
 
 Good practice, which our own validation followed:

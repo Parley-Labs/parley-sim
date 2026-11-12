@@ -1,11 +1,11 @@
 # Claim-rule validation, round 1
 
-Rules: parley-sim claims.py as of commit 330d10f ("v2").
+Rules: parley-sim claims.py as of commit daf0b5b ("v2"; 330d10f before the history was re-authored).
 Sample: 150 agent sentences from equiv-sd3, stratified by the rules' label
 (all 11 rule-flagged "understated", 64 "accurate", 75 "none"); run totals
 524 accurate, 11 understated, 1541 none. One blind human labeller.
 
-Result: kappa 0.63 (all labels), 0.50 (understated vs other). Fails the 0.84
+Result: kappa 0.63 (all labels), 0.50 (understated vs other; 0.07 reweighted to the pool). Fails the 0.84
 bar. Precision: accurate 62/64, understated 7/11. Recall is the problem: 7 of
 75 rule-"none" sentences were human-labelled understated (about 140 missed
 bluffs across the run vs 7 caught; ~5% recall) and 26/75 contained some claim.

@@ -23,12 +23,13 @@ arms run into their own directory).
 | `persona_file` | none | Persona panel for lineup entries with `persona: usersim` ([personas](personas.md)) |
 | `self_null_replicates` | `1` | Identical replays of each model-counterpart cell, for the noise floor; `0` skips them |
 | `concurrency` | `4` | Episodes in flight at once |
-| `max_total_tokens` | none | Hard cap on input + output tokens across the run |
+| `max_total_tokens` | none | Token cap (input + output) across the run, checked as each episode starts; see below |
 | `max_refusals` | `3` | Halt the whole run after this many provider refusals |
 
-The grid size is seeds × focal models × (1 + model arms × (1 +
-`self_null_replicates`)). `family-sd4.yaml`, for example, has 40 seeds, 2
-focal models, 2 arms and no replicates: 160 episodes.
+The grid size is seeds × focal models × (1 for `soc` + model arms × (1 +
+`self_null_replicates`)), counting only the arms in `run_arms` when it is set.
+`family-sd4.yaml`, for example, runs only its 2 model arms (`run_arms`), with
+40 seeds, 2 focal models and no replicates: 40 × 2 × 2 = 160 episodes.
 
 ## Model specs
 
@@ -58,11 +59,19 @@ Each `lineup` entry:
 | `scripted` | none | Plays a named policy through the text interface; for offline tests |
 | `harness` | none | Calls are made by an external harness (used by the NeMo Gym adapter) |
 
-The key is read from `api_key_env` if set. For `openai_compat` the client
-never falls back to `OPENAI_API_KEY`, so an OpenAI key is never sent to
-another gateway.
+The key is read from `api_key_env` if set, and a key is only ever sent to the
+host it belongs to:
 
-To pin OpenRouter to one upstream and get cost reporting:
+- `openai_compat` requires `base_url` and never falls back to
+  `OPENAI_API_KEY`;
+- `openai` with a custom `base_url` requires an explicit `api_key_env`, so
+  `OPENAI_API_KEY` is never sent to another host;
+- `anthropic` honours `base_url`, and if `api_key_env` names a variable that
+  is unset, it fails instead of falling back to `ANTHROPIC_API_KEY`.
+
+To pin OpenRouter to one upstream and get cost reporting (cost is reported
+only for calls OpenRouter bills; calls made with your own provider key
+through OpenRouter show $0):
 
 ```yaml
 provider_params:
@@ -82,7 +91,9 @@ For a model that might not support structured outputs everywhere, use
   `matched` exits with code 2 and a `RUN HALTED` message. Repeated refusals
   can get a provider account suspended; find the cause before re-running.
 - **Token cap.** With `max_total_tokens`, cells that would start after the
-  cap is reached are recorded as `skipped_budget`.
+  cap is reached are recorded as `skipped_budget`. Episodes already running
+  finish, so a run can overshoot by up to `concurrency` episodes. It caps
+  tokens, not money.
 - **Refusals are strikes, not substitutions.** No client silently falls back
   to another model, which would contaminate the evaluation.
 
