@@ -165,6 +165,30 @@ count toward the run's refusal breaker, and any 401, 402, 403 or 404 trips
 it at once. A high `focal_strike_rate` in one arm is a reason to distrust
 that arm's comparison.
 
+## Seeds and secrecy
+
+A seed names one scenario, and the generator is public and deterministic:
+anyone who knows a seed can compute every private value in its scenario.
+An agent that can run code doesn't even need the seed, since its own first
+observation identifies the seed by search (99% of `support_desk` seeds in a
+test of 20,000). That doesn't matter for an LLM reading a prompt, but it
+matters for a hosted benchmark of agent programs, and for training on the
+same seeds you evaluate on.
+
+- Keep training and evaluation on separate seed ranges, and keep held-out
+  evaluation seeds private until the evaluation is done. Seeds can be any
+  integer, so a random 63-bit range is fine.
+- When a client you don't control picks seeds (OpenEnv) or an agent might
+  search for its scenario (NeMo Gym), set a seed secret: `PARLEY_SEED_SECRET`
+  for the OpenEnv server, `seed_secret_env` for the NeMo Gym server. Each
+  requested seed is then keyed with the secret (HMAC-SHA256) into the scenario
+  seed actually played. The same requested seed still gives the same scenario
+  on every server with the same secret, so arms still pair, but without the
+  secret no one can compute it. The trace header records the scenario seed,
+  so traces still replay without the secret.
+- With OpenEnv, also set `PARLEY_RELEASE_TRACE=never`: a released trace shows
+  its own scenario, and the client could replay that seed.
+
 ## Traces
 
 Each episode writes one JSONL file: a `header` (spec, scenario, ground

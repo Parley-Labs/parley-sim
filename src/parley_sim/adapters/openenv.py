@@ -75,6 +75,7 @@ from pydantic import Field, model_validator
 
 from parley_sim import envs
 from parley_sim.core.protocol import JSON, MalformedOutput, Seat
+from parley_sim.core.rng import secret_seed
 from parley_sim.drivers.models import (
     Breaker,
     ModelSeat,
@@ -187,7 +188,9 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
     trace focal-only for good, and `state()` adds only the outcomes and
     metrics. It hides counterpart decisions, not the scenario: the generator
     is public, so a client that picks a seed can compute the counterpart's
-    private values itself.
+    private values itself, unless the server keys seeds with `seed_secret`:
+    then the scenario for a seed can't be computed without the secret. Use the
+    two together; a released trace still reveals its own scenario.
     The refusal breaker spans the whole session."""
 
     SUPPORTS_CONCURRENT_SESSIONS = True
@@ -197,7 +200,7 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
                  lineup: list[ModelSpec | dict[str, Any]] | None = None,
                  client_factory: Callable[[ModelSpec], ProviderClient] = build_client,
                  reward_metric: str = "focal_surplus_share", max_refusals: int = 3,
-                 release_trace: str = "after_done"):
+                 release_trace: str = "after_done", seed_secret: str | None = None):
         super().__init__()
         self._clients: dict[str, ProviderClient] = {}
         self._loop: asyncio.AbstractEventLoop | None = None  # the sync API's loop
@@ -212,6 +215,9 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
         if release_trace not in RELEASE_TRACE:
             raise ValueError(f"release_trace {release_trace!r} must be one of {list(RELEASE_TRACE)}")
         self.release_trace = release_trace
+        # With a secret, a requested seed is keyed into the scenario seed, so a
+        # client can't compute (or look up) the scenario from the seed it sends.
+        self.seed_secret = seed_secret or None
         self.seats = dict(seats)
         self.env_config = dict(env_config or {})
         self.lineup = {m.name: m for m in (ModelSpec(**m) if isinstance(m, dict) else m
@@ -325,9 +331,12 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
         # Build and validate everything first, so a bad argument leaves the
         # previous episode and its state as they were.
         seed = 0 if seed is None else int(seed)
+        # state.seed is the seed the client asked for; the trace header records
+        # the scenario seed actually played, so the trace replays without the secret.
+        scenario_seed = secret_seed(self.seed_secret, seed) if self.seed_secret else seed
         state = ParleySimState(episode_id=episode_id or str(uuid4()), step_count=0,
                                seed=seed, arm=arm, focal_seat=self.focal, seats=self.seats)
-        spec = EpisodeSpec(seed=seed, seats=self.seats, config=self.env_config,
+        spec = EpisodeSpec(seed=scenario_seed, seats=self.seats, config=self.env_config,
                            focal_seat=self.focal, arm=arm, cell_key=episode_id)
         policies = {s: self.entry.make_policy(label.split(":", 1)[1], s)
                     for s, label in self.seats.items() if label.startswith("policy:")}
@@ -492,6 +501,11 @@ def create_parley_app(*, max_concurrent_envs: int = 8, session_timeout_s: float 
             f"one counterpart decision can take ({needed:g}s: two attempts of the slowest "
             "model's timeout_s), so a session could be closed as idle mid-step. Raise the "
             f"session timeout to at least {needed:g}s, or lower timeout_s in the lineup.")
+    if environment_kwargs.get("seed_secret") and \
+            environment_kwargs.get("release_trace", "after_done") != "never":
+        _log.warning("seed_secret is set but traces are released after each episode: a client "
+                     "can replay a seed whose scenario it has seen. Serve with "
+                     "release_trace='never' (PARLEY_RELEASE_TRACE=never) to keep scenarios secret.")
     if os.getenv("ENABLE_WEB_INTERFACE", "false").strip().lower() in ("true", "1", "yes"):
         _log.warning("ENABLE_WEB_INTERFACE is set, but parley-sim never mounts OpenEnv's web "
                      "interface: it would share one environment between all its users. Serve "

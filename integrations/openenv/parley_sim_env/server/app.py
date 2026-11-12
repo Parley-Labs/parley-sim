@@ -16,6 +16,9 @@ Configured from the process environment, so one image serves any arm:
     PARLEY_RELEASE_TRACE  "after_done" (default): state() carries the full trace once an
                           episode is done; "never": state() only ever shows what the
                           focal seat saw, plus outcomes and metrics
+    PARLEY_SEED_SECRET    optional secret that keys requested seeds into scenario seeds,
+                          so a client can't compute a scenario from its seed; use with
+                          PARLEY_RELEASE_TRACE=never
 
 Play goes only through WebSocket sessions (/ws); the stateless HTTP /reset, /step
 and /state routes are disabled, and OpenEnv's web interface is never mounted
@@ -66,6 +69,7 @@ def build_app():
         max_concurrent_envs=int(os.getenv("MAX_CONCURRENT_ENVS", "8")),
         session_timeout_s=float(os.getenv("PARLEY_SESSION_TIMEOUT", "600")),
         release_trace=_choice("PARLEY_RELEASE_TRACE", RELEASE_TRACE, "after_done"),
+        seed_secret=os.getenv("PARLEY_SEED_SECRET") or None,
     )
 
 

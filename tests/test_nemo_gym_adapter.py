@@ -794,3 +794,20 @@ def test_partial_token_coverage_masks_the_sample():
     res = asyncio.run(full.run_request(
         _request({"agent": "model:focal", "customer": "policy:conceder"})))
     assert res.result.mask_sample is False  # no token ids at all: nothing partial
+
+
+def test_seed_secret_keys_task_seeds_into_scenario_seeds(monkeypatch):
+    from parley_sim.core.rng import secret_seed
+    monkeypatch.setenv("PARLEY_SEED_SECRET", "s3cret")
+    server, _ = _server({"focal": accept_if_offered}, seed_secret_env="PARLEY_SEED_SECRET")
+    res = asyncio.run(server.run_request(
+        _request({"agent": "model:focal", "customer": "policy:conceder"}, seed=3)))
+    assert res.failure is None
+    assert res.result.trace[0]["spec"]["seed"] == secret_seed("s3cret", 3)
+    assert verify(SupportDesk(), res.result.trace) == []
+
+
+def test_seed_secret_env_must_be_set(monkeypatch):
+    monkeypatch.delenv("PARLEY_NO_SUCH_SECRET", raising=False)
+    with pytest.raises(Exception, match="PARLEY_NO_SUCH_SECRET"):
+        _server({"focal": accept_if_offered}, seed_secret_env="PARLEY_NO_SUCH_SECRET")

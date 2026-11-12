@@ -427,3 +427,32 @@ def test_schema_projection_keeps_keys_the_schema_allows():
                     {"type": "object", "additionalProperties": typed["additionalProperties"]}) \
         == {"a": {"x": 1}}
     assert _project({"a": 1}, {"type": "object"}) == {"a": 1}
+
+
+def test_seed_secret_keys_the_scenario_and_still_replays():
+    from parley_sim.core.rng import secret_seed
+    plain = ParleySimEnvironment(seats=SCRIPTED)
+    keyed = ParleySimEnvironment(seats=SCRIPTED, seed_secret="s3cret")
+    twin = ParleySimEnvironment(seats=SCRIPTED, seed_secret="s3cret")
+    obs = [e.reset(seed=1000) for e in (plain, keyed, twin)]
+    # The client's seed no longer determines what it is told about its scenario...
+    assert obs[1].observation != obs[0].observation
+    # ...but the same seed under the same secret is the same scenario (arms still pair).
+    assert obs[1].observation == obs[2].observation
+    assert keyed.state.seed == 1000  # the seed the client asked for
+    assert str(secret_seed("s3cret", 1000)) not in json.dumps(serialize_observation(obs[1]))
+    while not keyed.state.done:
+        keyed.step(ParleySimAction(text=OK_REPLY.replace('"none"', '"walk_away"')))
+    trace = keyed.state.trace
+    assert trace[0]["spec"]["seed"] == secret_seed("s3cret", 1000)
+    assert verify(SupportDesk(), trace) == []  # replays without the secret
+
+
+def test_seed_secret_without_withheld_traces_warns(caplog):
+    with caplog.at_level(logging.WARNING, logger="parley_sim.adapters.openenv"):
+        create_parley_app(seats=SCRIPTED, seed_secret="s3cret")
+    assert "release_trace='never'" in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="parley_sim.adapters.openenv"):
+        create_parley_app(seats=SCRIPTED, seed_secret="s3cret", release_trace="never")
+    assert "seed_secret" not in caplog.text

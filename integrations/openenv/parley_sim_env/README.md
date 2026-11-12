@@ -80,6 +80,7 @@ The server reads its configuration from environment variables:
 | `PARLEY_MAX_REFUSALS` | `3` | Stop a session after this many provider refusals. |
 | `MAX_CONCURRENT_ENVS` | `8` | Concurrent sessions. |
 | `PARLEY_SESSION_TIMEOUT` | `600` | Close sessions idle this many seconds. Must be at least twice the largest `timeout_s` of a seated lineup model, or the server refuses to start. |
+| `PARLEY_SEED_SECRET` | none | Keys requested seeds into scenario seeds, so a client can't compute a scenario from its seed. Use with `PARLEY_RELEASE_TRACE=never`. |
 | `PARLEY_RELEASE_TRACE` | `after_done` | `after_done`: `env.state()` carries the full trace once an episode is done. `never`: it only ever shows what your model's seat saw, plus the outcomes and metrics. Any other value fails startup. |
 
 The server has no authentication, and with model counterparts every session
