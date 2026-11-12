@@ -775,6 +775,24 @@ def test_a_scripted_focal_seat_fails_at_seed():
     assert client.calls == []
 
 
+def test_echoed_prompt_messages_do_not_count_against_token_coverage():
+    def reply(user):
+        body = _gym_response(_turn({"type": "walk_away"}))
+        body["output"][0].update(prompt_token_ids=[1], generation_token_ids=[100],
+                                 generation_log_probs=[-0.1])
+        # Local agents echo their prompt into the output; it has no generated ids.
+        body["output"].insert(0, {"type": "message", "role": "user", "content": user})
+        return body
+    server, _ = _server({"focal": reply})
+    res = asyncio.run(server.run_request(
+        _request({"agent": "model:focal", "customer": "policy:hardliner"}, seed=3)))
+    assert res.failure is None
+    output = res.result.response["output"]
+    assert [(i.get("role"), i.get("generation_token_ids")) for i in output] == \
+        [("user", None), ("assistant", [100])]
+    assert res.result.mask_sample is False
+
+
 def test_partial_token_coverage_masks_the_sample():
     turns = iter([_turn({"type": "none"}), _turn({"type": "walk_away"})])
 
