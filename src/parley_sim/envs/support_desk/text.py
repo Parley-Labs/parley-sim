@@ -4,6 +4,8 @@ import json
 from typing import Any
 
 from parley_sim.core.protocol import JSON, MalformedOutput
+from parley_sim.envs.support_desk import scenario as sc
+from parley_sim.envs.support_desk.env import MAX_MESSAGE_CHARS
 
 PROMPT_VERSION = "sd-2"
 
@@ -90,6 +92,26 @@ def _private_block(obs: JSON) -> str:
     return "\n".join(lines)
 
 
+def _describe_entry(e: JSON) -> str:
+    move = e["move"]
+    detail = f" {json.dumps(move['deal'])}" if move["type"] == "propose" else ""
+    return f"\"{e['message']}\" (move: {move['type']}{detail})"
+
+
+def _same_move(entry: JSON, submitted: JSON) -> bool:
+    """Whether a recorded transcript entry is the action the seat submitted."""
+    move = submitted.get("move") or {}
+    if move.get("type") != entry["move"]["type"]:
+        return False
+    if move.get("type") == "propose":
+        try:
+            if sc.deal_to_json(sc.deal_from_json(move.get("deal"))) != entry["move"]["deal"]:
+                return False
+        except (ValueError, TypeError):
+            return False
+    return entry["message"] == str(submitted.get("message") or "")[:MAX_MESSAGE_CHARS]
+
+
 class SupportDeskText:
     prompt_version = PROMPT_VERSION
     action_schema = ACTION_SCHEMA
@@ -117,22 +139,36 @@ class SupportDeskText:
         ])
         return system, user
 
-    def render_update(self, previous: JSON, observation: JSON) -> str:
+    def render_update(self, previous: JSON, observation: JSON,
+                      submitted: JSON | None = None) -> str:
         """The next user message of a conversation seat: what happened since
-        its previous turn (the counterpart's moves; its own are already in the
-        conversation), the standing proposal and the turns left."""
+        its previous turn, its own standing proposal, the counterpart's, and
+        the turns left.
+
+        The seat's own replies are already in the conversation, so its own
+        moves are restated only when the record differs from what it last
+        submitted: an illegal move replaced by the fallback, a normalised or
+        truncated action, or a turn with no usable reply (`submitted` None)."""
         new = observation["transcript"][len(previous["transcript"]):]
+        own = [e for e in new if e["seat"] == observation["role"]]
         lines = []
         for e in new:
-            if e["seat"] == observation["role"]:
-                continue
-            move = e["move"]
-            detail = f" {json.dumps(move['deal'])}" if move["type"] == "propose" else ""
-            lines.append(f"[Counterpart] \"{e['message']}\" (move: {move['type']}{detail})")
-        theirs = observation["their_standing_offer"]
+            if e["seat"] != observation["role"]:
+                lines.append(f"[Counterpart] {_describe_entry(e)}")
+            elif e is not own[-1]:
+                lines.append(f"[You] Recorded for you on an earlier turn: {_describe_entry(e)}")
+            elif submitted is None:
+                lines.append("[You] Your last turn produced no usable reply, so it was recorded "
+                             f"as: {_describe_entry(e)}")
+            elif not _same_move(e, submitted):
+                lines.append("[You] Your last reply could not be applied as sent (it was not a "
+                             f"legal move here), so it was recorded as: {_describe_entry(e)}")
+        theirs, mine = observation["their_standing_offer"], observation["your_standing_offer"]
         return "\n".join([
             *(lines or ["The counterpart has not moved since your last turn."]),
             "",
+            f"Your standing proposal: {json.dumps(mine['deal'])}" if mine
+            else "Your standing proposal: none",
             f"Counterpart's latest proposal: {json.dumps(theirs['deal'])} "
             f"(value to you: {theirs['value_to_you']})" if theirs
             else "Counterpart's latest proposal: none",

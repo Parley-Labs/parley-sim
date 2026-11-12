@@ -97,3 +97,20 @@ def test_conversation_seat_sends_only_what_changed_after_its_own_replies():
 def test_stateless_seat_is_unchanged():
     client = FakeClient([GOOD])
     asyncio.run(seat(client).decide(request()))  # FakeClient takes no history argument
+
+
+def test_update_restates_own_move_only_when_the_record_differs():
+    env = SupportDesk()
+    text = SupportDeskText()
+    state = env.initial_state(env.generate(0, {}))
+    state, _ = env.apply(state, "customer", {"message": "hi", "move": {"type": "none"}})
+    before = env.observe(state, "agent")
+    sent = {"message": "ok", "move": {"type": "none"}}
+    state, _ = env.apply(state, "agent", sent)
+    state, _ = env.apply(state, "customer", {"message": "still here", "move": {"type": "none"}})
+    after = env.observe(state, "agent")
+    assert "[You]" not in text.render_update(before, after, sent)
+    assert "Your standing proposal: none" in text.render_update(before, after, sent)
+    other = {"message": "different", "move": {"type": "none"}}
+    assert "could not be applied as sent" in text.render_update(before, after, other)
+    assert "no usable reply" in text.render_update(before, after, None)

@@ -65,8 +65,11 @@ would see. Give your policies a range (in the example, `firm` and
 ## The text interface
 
 `render(observation) -> (system, user)` builds the prompt; optionally,
-`render_update(previous, observation) -> str` builds the next user message of
-a conversation seat (what changed since its previous turn; see
+`render_update(previous, observation, submitted) -> str` builds the next user
+message of a conversation seat: what changed since its previous turn,
+including its own move whenever the recorded move differs from `submitted`,
+the action it last sent (`None` when its last turn produced no usable reply);
+see
 `conversation` in [configuration](configuration.md#model-specs)), and without
 it a conversation seat resends the full rendered prompt each turn;
 `action_schema` is the JSON schema sent to providers for structured output;

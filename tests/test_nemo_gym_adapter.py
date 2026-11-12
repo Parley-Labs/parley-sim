@@ -297,3 +297,26 @@ def test_a_refusal_stays_out_of_the_conversation_and_the_agent_keeps_playing():
     assert inputs[2][-1]["content"].count("[Counterpart]") == 2
     assert [c["refused"] for c in res.result.focal_calls] == [False, True, False]
     assert len(res.result.response["output"]) == 2  # the refused call is not training data
+
+
+def test_update_says_when_the_agents_move_was_not_applied():
+    from parley_sim.envs.support_desk import scenario as sc
+    inst = SupportDesk().generate(0, {})
+    limits = sc.instance_to_json(inst)["agent"]["limits"]
+    over = {"discount_pct": 40, "credit_usd": 100, "upgrade": "none", "term": "monthly"}
+    assert over["discount_pct"] > limits["discount_pct"] or over["credit_usd"] > limits["credit_usd"]
+    replies = iter([json.dumps({"message": "I offer you this package.",
+                                "move": {"type": "propose", "deal": over}, "explanation": "x"}),
+                    _turn({"type": "walk_away"})])
+    server, client = _server({"focal": lambda u: next(replies)})
+    res = asyncio.run(server.run_request(
+        _request({"agent": "model:focal", "customer": "policy:hardliner"}, seed=0)))
+    focal = [d for d in res.result.trace if d["type"] == "decision" and d["seat"] == "agent"]
+    assert focal[0]["strike"] == "illegal_action"
+    inputs = [body["input"] for name, body in client.requests if name == "focal"]
+    # The sampled reply stays in the conversation for continuity...
+    assert "I offer you this package." in json.dumps(inputs[1][:-1])
+    # ...and the next update says what was actually recorded, and that no own offer stands.
+    update = inputs[1][-1]["content"]
+    assert "could not be applied as sent" in update and '(move: none)' in update
+    assert "Your standing proposal: none" in update

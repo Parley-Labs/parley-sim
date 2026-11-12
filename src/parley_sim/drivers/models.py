@@ -288,17 +288,21 @@ class ModelSeat:
         # observation at this seat's previous turn.
         self.history: list[JSON] = []
         self._previous: JSON | None = None
+        # The action this seat's last turn submitted (None: no usable reply),
+        # so the next update can say when the environment recorded otherwise.
+        self._submitted: JSON | None = None
 
     def _prompt(self, observation: JSON) -> tuple[str, str]:
         system, user = self.text.render(observation)
         if self.spec.conversation and self._previous is not None:
             update = getattr(self.text, "render_update", None)
             if update is not None:
-                user = update(self._previous, observation)
+                user = update(self._previous, observation, self._submitted)
         return system, user
 
     async def decide(self, req: DecisionRequest) -> DecisionResult:
         system, user = self._prompt(req.observation)
+        self._submitted = None
         attempts: list[JSON] = []
         error: str | None = None
         for _ in range(2):
@@ -342,6 +346,7 @@ class ModelSeat:
             except MalformedOutput as exc:
                 error = str(exc)
                 continue
+            self._submitted = action
             return self._result(req, attempts, action=action,
                                 reasoning=raw.get("provider_reasoning"), explanation=explanation)
         return self._result(req, attempts, strike="malformed_output", detail=error)
