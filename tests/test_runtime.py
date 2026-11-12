@@ -99,3 +99,24 @@ def test_abort_writes_errored_footer():
     ep.advance()
     done = ep.abort("boom")
     assert done.status == "errored" and ep.lines[-1]["error"] == "boom"
+
+
+@pytest.mark.parametrize("edit,problem", [
+    (lambda ls: ls[-1]["final_state"].__setitem__("turn", 999), "final state differs"),
+    (lambda ls: ls[0].__setitem__("initial_state_hash", "x"), "initial state hash"),
+    (lambda ls: ls[-1].__setitem__("n_strikes", 5), "n_strikes"),
+    (lambda ls: ls[-1].__setitem__("n_decisions", 1), "n_decisions"),
+])
+def test_verify_catches_edits_to_recorded_state_and_counts(tmp_path, edit, problem):
+    import asyncio
+
+    from parley_sim.cli import smoke_config
+    from parley_sim.envs.support_desk import SupportDesk
+    from parley_sim.matched import run_matched
+    from parley_sim.runtime import verify
+    from parley_sim.trace import read_trace
+    asyncio.run(run_matched(smoke_config("0:1"), tmp_path))
+    lines = read_trace(sorted((tmp_path / "traces").glob("*.jsonl"))[0])
+    assert verify(SupportDesk(), lines) == []
+    edit(lines)
+    assert any(problem in p for p in verify(SupportDesk(), lines))

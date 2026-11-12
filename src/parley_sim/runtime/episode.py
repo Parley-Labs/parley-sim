@@ -11,11 +11,12 @@ environment server, an OpenEnv environment) is a loop around:
 """
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from parley_sim.core.hashing import digest
+from parley_sim.core.hashing import canonical_json, digest
 from parley_sim.core.protocol import JSON, Environment, IllegalAction, Policy, Seat
 from parley_sim.trace import SCHEMA_VERSION
 
@@ -207,6 +208,13 @@ def verify(env: Environment, lines: list[dict[str, Any]]) -> list[str]:
         problems.append("ground truth differs from header")
     state = env.initial_state(instance)
     last_hash = digest(env.state_to_json(state))
+    if header.get("initial_state_hash") != last_hash:
+        problems.append("initial state hash differs from header")
+    decisions = [l for l in lines if l["type"] == "decision"]
+    if footer.get("n_decisions") != len(decisions):
+        problems.append("footer n_decisions differs from the decisions recorded")
+    if footer.get("n_strikes") != sum(l.get("strike") is not None for l in decisions):
+        problems.append("footer n_strikes differs from the strikes recorded")
     for line in lines[1:]:
         if line["type"] == "decision":
             try:
@@ -219,6 +227,9 @@ def verify(env: Environment, lines: list[dict[str, Any]]) -> list[str]:
             problems.append(f"seq {line['seq']}: state hash mismatch")
         elif line["type"] == "footer" and line["final_state_hash"] != last_hash:
             problems.append("final state hash mismatch")
+    if json.loads(canonical_json(footer.get("final_state"))) != \
+            json.loads(canonical_json(env.state_to_json(state))):
+        problems.append("final state differs from the replayed final state")
     if footer.get("status") == "complete" and footer.get("outcomes") != env.outcome(state):
         problems.append("outcomes differ from the replayed final state")
     return problems
