@@ -28,6 +28,7 @@ from typing import Any
 
 from parley_sim import envs
 from parley_sim.core.hashing import digest
+from parley_sim.core.specs import canonical_model_spec
 from parley_sim.trace import iter_trace, read_trace
 
 
@@ -115,7 +116,7 @@ def _arm_definition(config: dict[str, Any], arm: str) -> Any:
     members = (config.get("extra_arms") or {}).get(arm) if arm != "aoc" \
         else config["adaptive_counterparts"]
     lineup = {m["name"]: m for m in config["lineup"]}
-    return [digest(lineup[n]) for n in members or []]
+    return [digest(canonical_model_spec(lineup[n])) for n in members or []]
 
 
 def build_report(*out_dirs: str | Path,
@@ -138,7 +139,7 @@ def build_report(*out_dirs: str | Path,
         for focal in {c["focal"] for c in rows if c["status"] == "done"}:
             # Pairs are matched on the focal model's name, so the name must
             # mean the same model (provider, model id, settings) in every run.
-            definition = digest(lineup.get(focal))
+            definition = digest(canonical_model_spec(lineup.get(focal)))
             prior = focal_defs.setdefault(focal, (definition, str(out)))
             if prior[0] != definition:
                 raise ValueError(f"focal model {focal!r} is configured differently in "

@@ -252,6 +252,9 @@ def test_focal_tokens_reach_the_collected_rollout_and_the_conversation_is_contin
     generated = [item["generation_token_ids"] for item in result.response["output"]]
     assert generated == [[100 + k] for k in range(len(result.focal_calls))]
 
+    # The training payload is a valid response under the pinned NeMo schema.
+    NeMoGymResponse.model_validate(result.response)
+
     # Gym's collector turns the episode reply into the rollout record a trainer reads.
     record = _episode_record(res.model_dump(mode="json"))
     assert rollout_carries_token_ids(record)
@@ -273,3 +276,24 @@ def test_focal_conversation_can_be_turned_off():
         _request({"agent": "model:focal", "customer": "policy:conceder"})))
     assert res.result.response is None and res.result.focal_calls == []
     assert all(len(body["input"]) == 2 for name, body in client.requests if name == "focal")
+
+
+def test_a_refusal_stays_out_of_the_conversation_and_the_agent_keeps_playing():
+    replies = iter([_turn({"type": "none"}), ("refusal", "temporary refusal"),
+                    _turn({"type": "walk_away"})])
+    server, client = _server({"focal": lambda u: next(replies)}, max_refusals=3)
+    res = asyncio.run(server.run_request(
+        _request({"agent": "model:focal", "customer": "policy:hardliner"})))
+    assert res.failure is None
+    focal = [d for d in res.result.trace if d["type"] == "decision" and d["seat"] == "agent"]
+    assert [d["strike"] for d in focal] == [None, "refusal", None]
+    assert focal[-1]["applied"]["move"] == {"type": "walk_away"}
+    inputs = [body["input"] for name, body in client.requests if name == "focal"]
+    assert len(inputs) == 3
+    # The third prompt continues from the first reply, skipping the refused call,
+    # and its update covers both customer moves since that reply.
+    assert inputs[2][:len(inputs[0])] == inputs[0]
+    assert inputs[2][len(inputs[0]):-1] == res.result.focal_calls[0]["response"]["output"]
+    assert inputs[2][-1]["content"].count("[Counterpart]") == 2
+    assert [c["refused"] for c in res.result.focal_calls] == [False, True, False]
+    assert len(res.result.response["output"]) == 2  # the refused call is not training data
