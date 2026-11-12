@@ -114,3 +114,15 @@ def test_update_restates_own_move_only_when_the_record_differs():
     other = {"message": "different", "move": {"type": "none"}}
     assert "could not be applied as sent" in text.render_update(before, after, other)
     assert "no usable reply" in text.render_update(before, after, None)
+
+
+def test_update_reports_a_truncated_message():
+    from parley_sim.envs.support_desk.env import MAX_MESSAGE_CHARS
+    env, text = SupportDesk(), SupportDeskText()
+    state = env.initial_state(env.generate(0, {}))
+    state, _ = env.apply(state, "customer", {"message": "hi", "move": {"type": "none"}})
+    before = env.observe(state, "agent")
+    sent = {"message": "x" * (MAX_MESSAGE_CHARS + 50), "move": {"type": "none"}}
+    state, _ = env.apply(state, "agent", sent)
+    state, _ = env.apply(state, "customer", {"message": "ok", "move": {"type": "none"}})
+    assert "could not be applied as sent" in text.render_update(before, env.observe(state, "agent"), sent)

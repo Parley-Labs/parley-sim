@@ -255,3 +255,23 @@ def test_old_manifests_and_explicit_defaults_join_but_real_differences_do_not(tm
                                 run_arms=["persona"]), tmp_path / "c"))
     with pytest.raises(ValueError, match="configured differently"):
         build_report(tmp_path / "a", tmp_path / "c")
+
+
+def test_report_refuses_a_persona_arm_built_from_different_panels(tmp_path):
+    import json as _json
+    lineup = cfg().model_dump()["lineup"] + [
+        {"name": "scripted-reasonable", "provider": "scripted", "model": "reasonable"}]
+    for name, seeds in (("b", "0:2"), ("c", "2:4")):
+        asyncio.run(run_matched(cfg(run_id=name, seeds=seeds, lineup=lineup,
+                                    extra_arms={"persona": ["scripted-reasonable"]},
+                                    run_arms=["persona"]), tmp_path / name))
+    # Mark the arm as persona-driven, with a different panel in each run.
+    for name in ("b", "c"):
+        m = tmp_path / name / "manifest.jsonl"
+        rows = [_json.loads(l) for l in m.read_text().splitlines()]
+        spec = next(s for s in rows[0]["config"]["lineup"] if s["name"] == "scripted-reasonable")
+        spec["persona"] = "usersim"
+        rows[0]["persona_digest"] = f"panel-{name}"
+        m.write_text("".join(_json.dumps(r) + "\n" for r in rows))
+    with pytest.raises(ValueError, match="different persona panel"):
+        build_report(tmp_path / "b", tmp_path / "c")

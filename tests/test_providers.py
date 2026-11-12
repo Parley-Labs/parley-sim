@@ -58,6 +58,13 @@ def test_anthropic_refusal_becomes_a_refusal_strike(monkeypatch):
 GATEWAY = "https://gateway.invalid/v1"
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_base_urls(monkeypatch):
+    """The SDKs read these from the environment; tests set them explicitly."""
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+
+
 @pytest.mark.parametrize("provider,tokens_key", [("openai", "max_completion_tokens"),
                                                  ("openai_compat", "max_tokens")])
 def test_openai_paths(monkeypatch, provider, tokens_key):
@@ -185,3 +192,12 @@ def test_clients_replay_conversation_history(monkeypatch):
     an._client = NS(messages=rec)
     asyncio.run(an.complete(system="s", user="u2", schema={}, history=history))
     assert [m["role"] for m in rec.kwargs["messages"]] == ["user", "assistant", "user"]
+
+
+def test_anthropic_guard_covers_the_sdk_base_url_variable(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "secret")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", GATEWAY)
+    with pytest.raises(ValueError, match="api_key_env"):
+        AnthropicClient(ModelSpec(name="a", provider="anthropic", model="m"))
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "")
+    AnthropicClient(ModelSpec(name="a", provider="anthropic", model="m"))

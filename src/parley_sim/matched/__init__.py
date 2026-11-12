@@ -22,6 +22,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from parley_sim import envs
+from parley_sim.core.hashing import digest
 from parley_sim.core.protocol import Seat
 from parley_sim.core.specs import canonical_model_spec
 from parley_sim.drivers.local import run_episode
@@ -225,6 +226,12 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
     cells = build_grid(cfg)
     run_row = {"type": "run", "run_id": cfg.run_id, "config_hash": chash,
                "config": cfg.model_dump()}
+    personas = None
+    if cfg.persona_file and any(m.persona for m in cfg.lineup):
+        from parley_sim.drivers.usersim_persona import load_personas
+        personas = load_personas(cfg.persona_file)
+        # The panel's content, not its path, decides each seed's persona.
+        run_row["persona_digest"] = digest(personas)
 
     done: dict[str, dict[str, Any]] = {}
     if manifest.exists():
@@ -232,6 +239,9 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
         prior = next((r for r in rows if r["type"] == "run"), None)
         if prior is None or prior["config_hash"] != chash:
             raise RuntimeError(f"{manifest} was built from a different config; use a new --out")
+        if prior.get("persona_digest") not in (None, run_row.get("persona_digest")):
+            raise RuntimeError(f"{manifest} was built from a different persona panel; "
+                               "use a new --out")
         for r in rows:
             if r["type"] == "cell" and r["status"] == "done" and is_complete(out / r["trace"]):
                 done[r["cell_key"]] = r
@@ -248,11 +258,6 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
     def append(row: dict[str, Any]) -> None:
         fh.write(json.dumps(row, sort_keys=True) + "\n")
         fh.flush()
-
-    personas = None
-    if cfg.persona_file and any(m.persona for m in cfg.lineup):
-        from parley_sim.drivers.usersim_persona import load_personas
-        personas = load_personas(cfg.persona_file)
 
     def text_for(spec: ModelSpec, seed: int):
         if spec.persona == "usersim":

@@ -65,8 +65,11 @@ class ProviderRefusal(Exception):
 
 
 class ProviderClient(Protocol):
-    async def complete(self, *, system: str, user: str, schema: JSON) -> tuple[Any, JSON]:
-        """(payload, raw). `payload` is a dict or a JSON string."""
+    async def complete(self, *, system: str, user: str, schema: JSON,
+                       history: list[JSON] | None = None) -> tuple[Any, JSON]:
+        """(payload, raw). `payload` is a dict or a JSON string. `history`
+        (earlier {"user", "assistant"} exchanges) is passed only to seats with
+        `conversation: true`; a client used for them must accept it."""
 
 
 def _history_messages(history: list[JSON] | None) -> list[JSON]:
@@ -100,15 +103,17 @@ class AnthropicClient:
     def __init__(self, spec: ModelSpec):
         import anthropic
         self.spec = spec
-        if spec.base_url and not spec.api_key_env:
+        # The SDK reads ANTHROPIC_BASE_URL when no base_url is given, so guard
+        # the endpoint the client will actually use.
+        base_url = spec.base_url or os.environ.get("ANTHROPIC_BASE_URL") or None
+        if base_url and not spec.api_key_env:
             raise ValueError(f"{spec.name}: a custom base_url needs api_key_env, so "
                              "ANTHROPIC_API_KEY is never sent to another host")
-        _check_endpoint(spec.name, spec.base_url)
+        _check_endpoint(spec.name, base_url)
         env = spec.api_key_env or "ANTHROPIC_API_KEY"
         if spec.api_key_env and not os.environ.get(env):
             raise RuntimeError(f"{env} is not set")  # never fall back to ANTHROPIC_API_KEY
-        self._client = anthropic.AsyncAnthropic(api_key=os.environ.get(env),
-                                                base_url=spec.base_url)
+        self._client = anthropic.AsyncAnthropic(api_key=os.environ.get(env), base_url=base_url)
 
     async def complete(self, *, system: str, user: str, schema: JSON,
                        history: list[JSON] | None = None) -> tuple[Any, JSON]:
