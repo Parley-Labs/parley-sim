@@ -105,6 +105,13 @@ class ParleySimEpisodeResult(BaseModel):
     n_decisions: int
     n_strikes: int
     trace: list[dict[str, Any]]
+    # The focal seat's training payload: a Gym-native Responses object whose
+    # output items are every focal reply in order, token ids and log probs
+    # included as the agent returned them. Counterpart replies are never in
+    # it. Gym's collector reads it as the rollout's `response`.
+    response: dict[str, Any] | None = None
+    # Every focal model call in full (request and response), for audit.
+    focal_calls: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ParleySimEpisodeRequest(BaseEpisodeRequest[ParleySimTaskInput]):
@@ -123,6 +130,9 @@ class ParleySimEnvironmentServerConfig(BaseEnvironmentServerConfig):
     reward_metric: str = "focal_surplus_share"
     actor_call_timeout_seconds: float = Field(300.0, gt=0)
     max_refusals: int = Field(3, ge=1)
+    # Play the focal seat as one growing conversation, so its token sequence
+    # is continuous across turns and the episode yields one training sample.
+    focal_conversation: bool = True
     # Environments task rows may name by import path ("pkg.module:ENTRY").
     # Names of built-in, registered or entry-point environments are always
     # allowed; an import path in a task row is refused unless listed here,
@@ -141,6 +151,9 @@ class _AgentSessionClient:
         self.target, self.trained = target, trained
         self.session_id: str | None = None
         self.cookies: dict[str, str] = {}
+        # Conversation seats: (user message, output items) per completed call.
+        self.exchanges: list[tuple[str, list[dict[str, Any]]]] = []
+        self.calls: list[dict[str, Any]] = []
 
     async def _seed(self) -> None:
         session_id = f"agent-session-{uuid4().hex}"
@@ -168,10 +181,36 @@ class _AgentSessionClient:
             raise ValueError("Agent seed returned a different agent_session_id")
         self.cookies = _cookies(response)
 
-    async def complete(self, *, system: str, user: str, schema: JSON) -> tuple[Any, JSON]:
+    def _input(self, system: str, user: str, history: list[JSON] | None) -> list[Any]:
+        """The request input. A conversation seat resends its earlier turns with
+        the agent's own output items verbatim, so each prompt extends the
+        previous one token for token."""
+        if history is None:
+            return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        if len(history) != len(self.exchanges):
+            raise ValueError("conversation history is out of step with the agent session")
+        items: list[Any] = [{"role": "system", "content": system}]
+        for prior_user, output in self.exchanges:
+            items += [{"role": "user", "content": prior_user}, *output]
+        return [*items, {"role": "user", "content": user}]
+
+    def training_response(self) -> dict[str, Any] | None:
+        """Every reply of this conversation seat as one Gym-native response."""
+        if not self.calls:
+            return None
+        responses = [c["response"] for c in self.calls]
+        usage = [r.get("usage") or {} for r in responses]
+        return {"id": f"parley-{self.request.episode_id.rollout_id}-{self.target.name}",
+                "object": "response", "model": responses[-1].get("model", ""),
+                "output": [item for _, output in self.exchanges for item in output],
+                "usage": {"input_tokens": usage[-1].get("input_tokens", 0) or 0,
+                          "output_tokens": sum(u.get("output_tokens", 0) or 0 for u in usage)}}
+
+    async def complete(self, *, system: str, user: str, schema: JSON,
+                       history: list[JSON] | None = None) -> tuple[Any, JSON]:
         params = {
             **self.server.config.responses_create_params,
-            "input": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            "input": self._input(system, user, history),
             "text": {"format": {"type": "json_schema", "name": "turn", "schema": schema}},
         }
         try:
@@ -190,6 +229,10 @@ class _AgentSessionClient:
         except Exception as error:
             raise EpisodeAbort(f"agent {self.target.name}: {_describe(error)}"[:2000],
                                retryable=_is_retryable(error)) from error
+        dumped = result.model_dump(mode="json")
+        if history is not None:
+            self.exchanges.append((user, dumped["output"]))
+            self.calls.append({"request": params, "response": dumped})
         text, refusal, reasoning = _read_output(result)
         if refusal is not None and not text:
             raise ProviderRefusal(refusal or "refusal")
@@ -263,12 +306,15 @@ class ParleySimEnvironmentServer(
 
         metrics = entry.episode_metrics(episode.lines)
         reward = metrics.get(self.config.reward_metric)
+        focal_client = seats[focal].client if focal in seats else None
         return ParleySimEpisodeResponse(
             episode_id=request.episode_id, task_id=request.task.task_id,
             result=ParleySimEpisodeResult(
                 reward=float(reward) if reward is not None else 0.0, status=event.status,
                 outcomes=event.outcomes, metrics=metrics, n_decisions=event.n_decisions,
-                n_strikes=event.n_strikes, trace=episode.lines))
+                n_strikes=event.n_strikes, trace=episode.lines,
+                response=focal_client.training_response() if focal_client else None,
+                focal_calls=focal_client.calls if focal_client else []))
 
     def _model_seats(self, request: ParleySimEpisodeRequest, cleanup: CleanupContext,
                      entry: envs.EnvEntry, spec: EpisodeSpec, focal: Seat) -> dict[Seat, ModelSeat]:
@@ -289,7 +335,8 @@ class ParleySimEnvironmentServer(
                 raise KeyError(f"no counterpart agent configured for {label!r}")
             model = ModelSpec(name=name.replace("/", "-") or "agent", provider="harness",
                               model=target.name,
-                              timeout_s=self.config.actor_call_timeout_seconds + 30)
+                              timeout_s=self.config.actor_call_timeout_seconds + 30,
+                              conversation=seat == focal and self.config.focal_conversation)
             client = _AgentSessionClient(self, request, cleanup, target, trained=seat == focal)
             seats[seat] = ModelSeat(model, entry.text(), client, breaker)
         return seats

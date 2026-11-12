@@ -48,6 +48,7 @@ Each `lineup` entry:
 | `timeout_s` | `120` | Per-call timeout |
 | `provider_params` | none | Merged into the request last, e.g. OpenRouter routing |
 | `persona` | none | `usersim` conditions this seat on a UserSim persona |
+| `conversation` | `false` | Play the seat as one growing conversation: after the first turn, each prompt is only what changed since the seat last acted, sent after its own earlier replies. Off, every turn is a freshly rendered prompt. The NeMo Gym adapter uses it for the trained seat; turn it on locally to evaluate with the same prompt shape |
 
 ### Providers
 

@@ -167,3 +167,21 @@ def test_keys_travel_only_over_tls_except_to_localhost(monkeypatch):
                                base_url="http://gateway.example/v1"))
     OpenAIClient(ModelSpec(name="o", provider="openai_compat", model="m",
                            base_url="http://localhost:8000/v1"))
+
+
+def test_clients_replay_conversation_history(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "placeholder")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    history = [{"user": "u1", "assistant": "a1"}]
+    oa = OpenAIClient(ModelSpec(name="o", provider="openai_compat", model="m", base_url=GATEWAY))
+    rec = Recorder(NS(model="m", choices=[NS(message=NS(content="{}", refusal=None), finish_reason="stop")],
+                      usage=NS(prompt_tokens=1, completion_tokens=1)))
+    oa._client = NS(chat=NS(completions=rec))
+    asyncio.run(oa.complete(system="s", user="u2", schema={}, history=history))
+    assert [m["content"] for m in rec.kwargs["messages"]] == ["s", "u1", "a1", "u2"]
+    an = AnthropicClient(ModelSpec(name="a", provider="anthropic", model="m"))
+    rec = Recorder(NS(model="m", stop_reason="end_turn", usage=NS(input_tokens=1, output_tokens=1),
+                      content=[NS(type="text", text="{}")]))
+    an._client = NS(messages=rec)
+    asyncio.run(an.complete(system="s", user="u2", schema={}, history=history))
+    assert [m["role"] for m in rec.kwargs["messages"]] == ["user", "assistant", "user"]

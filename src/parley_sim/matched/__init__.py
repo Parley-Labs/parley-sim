@@ -153,6 +153,9 @@ def config_hash(cfg: MatchedConfig) -> str:
     data = cfg.model_dump()
     for k in _OPERATIONAL:
         data.pop(k)
+    for spec in data["lineup"]:  # fields added later hash as before while left at their default
+        if not spec.get("conversation"):
+            spec.pop("conversation", None)
     return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
 

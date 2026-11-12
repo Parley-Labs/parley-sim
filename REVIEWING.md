@@ -102,7 +102,9 @@ needs NVIDIA's persona dataset (see `docs/personas.md`).
   fixed rules are not re-validated. No finding depends on it.
 - **Adapters.** The OpenEnv package has been built as a Docker image and
   played over HTTP. The NeMo Gym adapter has only been tested against the
-  pinned library, not a live Gym deployment.
+  pinned library, not a live Gym deployment; its training payload (the focal
+  seat's token-bearing `response`) is tested through Gym's own rollout-record
+  code but not through a NeMo-RL training run.
 - **Commit history was re-authored** before publication (authorship only; the
   trees are identical). Commit hashes cited in older notes were updated.
 

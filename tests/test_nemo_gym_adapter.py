@@ -66,6 +66,7 @@ class _Client(ServerClient):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     calls: list[tuple[str, str]] = []
+    requests: list[tuple[str, dict]] = []
     policy: dict = {}  # agent server name -> fn(user_prompt) -> reply text | Exception | ("refusal", why)
 
     async def post(self, server_name: str, url_path: str, **kwargs) -> _Response:
@@ -81,10 +82,13 @@ class _Client(ServerClient):
             return _Response({"agent_session_id": close.agent_session_id})
         params = NeMoGymResponseCreateParamsNonStreaming.model_validate(body)
         assert params.text["format"]["type"] == "json_schema"
+        self.requests.append((server_name, body))
         user = params.input[-1].content
         reply = self.policy[server_name](user)
         if isinstance(reply, Exception):
             raise reply
+        if isinstance(reply, dict):  # a full response body, e.g. one carrying token ids
+            return _Response(reply)
         if isinstance(reply, tuple):
             return _Response(_gym_response(refusal=reply[1]))
         return _Response(_gym_response(reply))
@@ -215,3 +219,57 @@ def test_registered_env_names_with_a_colon_are_allowed():
                                   env="vendor:desk")))
     res = asyncio.run(server.run_request(req))
     assert res.failure is None and res.result.status == "complete"
+
+
+def _token_response(text: str, prompt: list[int], generated: list[int]) -> dict:
+    body = _gym_response(text)
+    body["output"][0].update(prompt_token_ids=prompt, generation_token_ids=generated,
+                             generation_log_probs=[-0.1] * len(generated))
+    return NeMoGymResponse.model_validate(body).model_dump(mode="json")
+
+
+def test_focal_tokens_reach_the_collected_rollout_and_the_conversation_is_continuous():
+    from nemo_gym.rollout_collection import _episode_record
+    from nemo_gym.token_id_capture.delivery import rollout_carries_token_ids
+
+    focal_turns = iter(range(10))
+    peer_moves = iter([{"type": "none"}, {"type": "none"}, {"type": "walk_away"}])
+
+    def focal(user):
+        k = next(focal_turns)
+        return _token_response(_turn({"type": "none"}), prompt=[1, 2, k], generated=[100 + k])
+
+    def peer(user):
+        return _token_response(_turn(next(peer_moves)), prompt=[7], generated=[900])
+
+    server, client = _server({"focal": focal, "peer": peer})
+    res = asyncio.run(server.run_request(_request({"agent": "model:focal", "customer": "model:peer"})))
+    assert res.failure is None, res.failure
+    result = res.result
+    assert len(result.focal_calls) >= 2
+
+    # The training payload holds every focal reply's tokens, in order, and no counterpart tokens.
+    generated = [item["generation_token_ids"] for item in result.response["output"]]
+    assert generated == [[100 + k] for k in range(len(result.focal_calls))]
+
+    # Gym's collector turns the episode reply into the rollout record a trainer reads.
+    record = _episode_record(res.model_dump(mode="json"))
+    assert rollout_carries_token_ids(record)
+    assert record["response"]["output"] == result.response["output"]
+
+    # Each focal prompt extends the previous one: earlier input, then the agent's own
+    # output items verbatim, then the new user message. That keeps tokens continuous.
+    focal_inputs = [body["input"] for name, body in client.requests if name == "focal"]
+    for k in range(1, len(focal_inputs)):
+        before, after = focal_inputs[k - 1], focal_inputs[k]
+        assert after[:len(before)] == before
+        assert after[len(before):-1] == result.focal_calls[k - 1]["response"]["output"]
+        assert after[-1]["role"] == "user"
+
+
+def test_focal_conversation_can_be_turned_off():
+    server, client = _server({"focal": accept_if_offered}, focal_conversation=False)
+    res = asyncio.run(server.run_request(
+        _request({"agent": "model:focal", "customer": "policy:conceder"})))
+    assert res.result.response is None and res.result.focal_calls == []
+    assert all(len(body["input"]) == 2 for name, body in client.requests if name == "focal")
