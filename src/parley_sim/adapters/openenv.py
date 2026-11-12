@@ -10,13 +10,16 @@ While an episode runs, `state` shows only what the focal seat can see. Once the
 episode is done, its full trace (the scenario, ground truth and every
 counterpart decision) is released through `state` by default, so opponent
 behavior is never hidden in the container. A client chooses its seeds, so it can
-end an episode at once, read the released trace, and replay the same seed: when
-the client must not learn counterpart information, serve with
-`release_trace="never"` (`PARLEY_RELEASE_TRACE=never` in the packaged server).
+end an episode at once, read the released trace, and replay the same seed.
+`release_trace="never"` (`PARLEY_RELEASE_TRACE=never` in the packaged server)
+keeps counterpart decisions and the scenario out of `state()` for good. It
+does not make the scenario secret: the generator is public and deterministic,
+so a client that picks a seed can compute the counterpart's private values
+itself.
 
 Play goes only through OpenEnv's WebSocket sessions (`/ws`, which `ParleySimEnv`
 uses), where the session limit, idle timeout and refusal breaker apply. The
-stateless HTTP `/reset`, `/step` and `/state` routes are disabled, and the
+stateless HTTP `/reset`, `/step`, `/state` and `/mcp` routes are disabled, and the
 Gradio web interface is never mounted.
 
 Targets openenv 0.12. A server entry point (OpenEnv's `server/app.py`):
@@ -87,7 +90,7 @@ DEFAULT_MESSAGE_TIMEOUT_S = 300.0
 # Anything a text interface's parse can raise on hostile input: deeply nested
 # JSON overflows the recursion limit, odd types raise TypeError.
 _PARSE_ERRORS = (MalformedOutput, RecursionError, ValueError, TypeError)
-_STATELESS_ROUTES = ("/reset", "/step", "/state")
+_STATELESS_ROUTES = ("/reset", "/step", "/state", "/mcp")
 _log = logging.getLogger(__name__)
 _closing: set[asyncio.Task[None]] = set()  # strong refs to scheduled client closes
 
@@ -163,9 +166,11 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
     `release_trace="after_done"` (the default) the full trace, with the
     scenario, ground truth and counterpart decisions, is released once the
     episode is done. A client picks its seeds, so it can end an episode at once,
-    read that trace, and replay the seed: use `release_trace="never"` when the
-    client must not learn counterpart information. Then the trace stays
-    focal-only for good, and `state()` adds only the outcomes and metrics.
+    read that trace, and replay the seed. `release_trace="never"` keeps the
+    trace focal-only for good, and `state()` adds only the outcomes and
+    metrics. It hides counterpart decisions, not the scenario: the generator
+    is public, so a client that picks a seed can compute the counterpart's
+    private values itself.
     The refusal breaker spans the whole session."""
 
     SUPPORTS_CONCURRENT_SESSIONS = True
@@ -443,7 +448,7 @@ def create_parley_app(*, max_concurrent_envs: int = 8, session_timeout_s: float 
     """An OpenEnv FastAPI app serving ParleySimEnvironment(**environment_kwargs).
 
     All play goes through WebSocket sessions (`/ws`): the stateless HTTP
-    `/reset`, `/step` and `/state` routes answer 405, since each such call
+    `/reset`, `/step`, `/state` and `/mcp` routes answer 405, since each such call
     would build a fresh environment (new breaker, new provider clients)
     outside the session limit. The Gradio web interface is never mounted,
     whatever ENABLE_WEB_INTERFACE says, because it shares one environment

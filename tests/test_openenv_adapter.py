@@ -212,7 +212,9 @@ def test_stateless_http_routes_run_no_episode_and_make_no_clients():
     client = TestClient(app)
     for method, path, body in [("POST", "/reset", {"seed": 5}),
                                ("POST", "/step", {"action": {"text": OK_REPLY}}),
-                               ("GET", "/state", None)]:
+                               ("GET", "/state", None),
+                               ("POST", "/mcp", {"jsonrpc": "2.0", "id": 1,
+                                                 "method": "tools/list"})]:
         resp = client.request(method, path, json=body)
         assert resp.status_code == 405, (path, resp.text)
         assert "/ws" in resp.json()["detail"]

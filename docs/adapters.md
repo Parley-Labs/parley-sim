@@ -195,14 +195,18 @@ focal seat can see. Once an episode ends, its full trace, including the
 scenario, ground truth and every counterpart decision, is released, so
 opponent behavior is never hidden in the container. The client chooses the
 seeds, so it can end an episode at once, read the released trace, and replay
-the same seed knowing the counterpart's private values. When the client must
-not learn counterpart information, run the server with
-`PARLEY_RELEASE_TRACE=never`: `state()` then only ever shows what the focal
-seat saw, plus the outcomes and metrics.
+the same seed knowing the counterpart's private values. With
+`PARLEY_RELEASE_TRACE=never`, `state()` only ever shows what the focal seat
+saw, plus the outcomes and metrics, so counterpart decisions (and an LLM
+counterpart's messages beyond what the focal seat saw) stay in the server.
+It does not make the scenario secret: the scenario generator is public and
+deterministic, so a client that picks a seed can compute the counterpart's
+private values itself. Treat the client that drives training as trusted; the
+model being trained only ever sees the observations the client passes it.
 
 Play goes only through OpenEnv's WebSocket sessions (`/ws`, which
 `ParleySimEnv` uses), where the session limit, idle timeout and refusal
-breaker apply. The stateless HTTP `/reset`, `/step` and `/state` routes answer
+breaker apply. The stateless HTTP `/reset`, `/step`, `/state` and `/mcp` routes answer
 405, and OpenEnv's web interface is never mounted, whatever
 `ENABLE_WEB_INTERFACE` says, because it would share one environment between
 all its users. If you deploy with `openenv push`, pass `--no-interface`.

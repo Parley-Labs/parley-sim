@@ -513,3 +513,26 @@ def test_render_shows_opening_counts_decision_counts_and_small_p(tmp_path):
     assert "| n_openings |" in text
     assert "(p<0.001, n=6)" in text and "p=0.000" not in text
     assert "| decisions facing an offer |" in text and "| offers |" not in text
+
+
+def test_resume_refuses_finished_persona_cells_with_no_recorded_panel(tmp_path, monkeypatch):
+    import json as _json
+
+    from parley_sim.drivers import usersim_persona
+    monkeypatch.setattr(usersim_persona, "usersim_block",
+                        lambda persona, locale="en_US": ("PERSONA BLOCK",
+                                                         {"usersim_version": "0-test"}))
+    panel = tmp_path / "p.jsonl"
+    panel.write_text(_json.dumps({"persona": {"first_name": "Dana"}}) + "\n")
+    lineup = cfg().model_dump()["lineup"] + [
+        {"name": "us-customer", "provider": "scripted", "model": "conceder", "persona": "usersim"}]
+    config = cfg(seeds="0:2", lineup=lineup, extra_arms={"usersim": ["us-customer"]},
+                 run_arms=["usersim"], persona_file=str(panel))
+    asyncio.run(run_matched(config, tmp_path / "run"))
+    m = tmp_path / "run" / "manifest.jsonl"
+    rows = [_json.loads(line) for line in m.read_text().splitlines()]
+    assert rows[0]["persona_digest"] and any(r.get("status") == "done" for r in rows[1:])
+    del rows[0]["persona_digest"]  # a manifest written before panels were recorded
+    m.write_text("".join(_json.dumps(r) + "\n" for r in rows))
+    with pytest.raises(RuntimeError, match="did not record"):
+        asyncio.run(run_matched(config, tmp_path / "run"))
