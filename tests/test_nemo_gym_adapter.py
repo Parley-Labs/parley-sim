@@ -693,7 +693,12 @@ async def _http_episode(model_reply, *, observability: bool = False):
     previous = su._GLOBAL_AIOHTTP_CLIENT
     su._GLOBAL_AIOHTTP_CLIENT = aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar())
     try:
+        deadline = asyncio.get_running_loop().time() + 30
         while not all(s.started for s, _ in servers):
+            failed = [task for s, task in servers if task.done() and not s.started]
+            if failed or asyncio.get_running_loop().time() > deadline:
+                raise RuntimeError("test HTTP server did not start"
+                                   + (f": {failed[0].exception()!r}" if failed else " in 30 s"))
             await asyncio.sleep(0.02)
         env = ParleySimEnvironmentServer(config=ParleySimEnvironmentServerConfig(
             name="parley_sim", host="127.0.0.1", port=3, entrypoint="app.py", cleanup_timeout_seconds=10,
@@ -745,3 +750,47 @@ def test_over_http_the_model_gets_its_own_items_back_and_no_gym_keys_leak():
     assert [i["generation_token_ids"] for i in result.response["output"]] == [
         [50], [100], [51], [101], [52], [102]]
     assert result.response["id"] == "resp-2"
+
+
+def test_a_refusal_part_beside_text_is_a_refusal():
+    def refuse_with_text(user):
+        body = _gym_response(_turn({"type": "none"}))
+        body["output"][0]["content"].append({"type": "refusal", "refusal": "won't"})
+        return body
+    replies = iter([refuse_with_text, lambda u: _turn({"type": "walk_away"})])
+    server, _ = _server({"focal": lambda u: next(replies)(u)}, max_refusals=3)
+    res = asyncio.run(server.run_request(
+        _request({"agent": "model:focal", "customer": "policy:hardliner"})))
+    focal = [d for d in res.result.trace if d["type"] == "decision" and d["seat"] == "agent"]
+    assert focal[0]["strike"] == "refusal"
+    assert [c["in_conversation"] for c in res.result.focal_calls][:1] == [False]
+
+
+def test_a_scripted_focal_seat_fails_at_seed():
+    server, client = _server({"focal": accept_if_offered})
+    res = asyncio.run(server.run_request(
+        _request({"agent": "policy:agent_scripted", "customer": "policy:conceder"})))
+    assert res.failure is not None and res.failure.stage == "seed"
+    assert "must be played by the agent under training" in res.failure.failure_reason
+    assert client.calls == []
+
+
+def test_partial_token_coverage_masks_the_sample():
+    turns = iter([_turn({"type": "none"}), _turn({"type": "walk_away"})])
+
+    def reply(user):
+        body = _gym_response(next(turns))
+        if len([c for c in reply.seen]) == 0:  # only the first reply carries token ids
+            body["output"][0].update(prompt_token_ids=[1], generation_token_ids=[100],
+                                     generation_log_probs=[-0.1])
+        reply.seen.append(user)
+        return body
+    reply.seen = []
+    server, _ = _server({"focal": reply})
+    res = asyncio.run(server.run_request(
+        _request({"agent": "model:focal", "customer": "policy:hardliner"})))
+    assert res.failure is None and res.result.mask_sample is True
+    full, _ = _server({"focal": accept_if_offered})
+    res = asyncio.run(full.run_request(
+        _request({"agent": "model:focal", "customer": "policy:conceder"})))
+    assert res.result.mask_sample is False  # no token ids at all: nothing partial

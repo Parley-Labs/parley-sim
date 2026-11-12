@@ -29,6 +29,7 @@ the same code and is the one that will be merged; #2 is never merged.
 
 ```bash
 git clone https://github.com/Parley-Labs/parley-sim && cd parley-sim
+git checkout review-fixes              # the code under review, until #1 is merged
 uv sync --extra openai --extra anthropic --extra openenv
 uv run pytest -q                       # about 270 tests; 2 skip without the gym and usersim extras
 uv run parley-sim smoke                # whole pipeline offline; prints "replay check: ok"
@@ -58,11 +59,15 @@ needs NVIDIA's persona dataset (see `docs/personas.md`).
    scenario-fingerprint check in `build_report`.
 2. **Traces are exactly replayable.**
    `uv run parley-sim verify results/*/traces/*.jsonl` replays all 400
-   published traces and checks every logged field against the replay: who
-   acts, each observation and decision context, the moves (re-running the
-   scripted policies), every event and state hash, the ground truth, the
-   outcomes, and that a "complete" game really ended.
-3. **The published reports are reproducible from the published data.**
+   published traces and checks the header, decisions, events and footer
+   against the replay: who acts, each observation and decision context, the
+   moves (re-running the scripted policies), every event and state hash, the
+   ground truth, the outcomes, and that a "complete" game really ended. It
+   does not check a decision's model-side fields (`raw`, `reasoning`,
+   `explanation`, `detail`), which can't be recomputed without the model.
+3. **The published reports are reproducible from the published data,**
+   except the persona (`usersim`) comparisons, whose traces are withheld
+   (see item 4).
    `uv run parley-sim report results/equiv-sd3 --margins focal_surplus_share=0.08,turns=0.8`
    and compare with `results/equiv-sd3/report.md`. Known, documented
    differences are listed at the end of `results/README.md`.
