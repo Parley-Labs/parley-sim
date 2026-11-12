@@ -298,3 +298,14 @@ def test_verify_reports_a_deeply_nested_trace_instead_of_crashing(tmp_path):
     bad.write_text("[" * 200_000 + "]" * 200_000 + "\n")
     problems = verify_file(bad)
     assert problems and not is_complete(bad)
+
+
+def test_secret_seed_is_keyed_deterministic_and_63_bit():
+    import pytest
+
+    from parley_sim.core.rng import secret_seed
+    a = secret_seed("s3cret", 1000)
+    assert a == secret_seed("s3cret", 1000) and 0 <= a < 2**63
+    assert a != secret_seed("other", 1000) and a != secret_seed("s3cret", 1001) and a != 1000
+    with pytest.raises(ValueError):
+        secret_seed("", 1000)

@@ -56,6 +56,7 @@ not accepted: the episode id it would lack carries the token-capture key.
 from __future__ import annotations
 
 import asyncio
+import os
 import statistics
 from typing import Any, Self
 from uuid import uuid4
@@ -87,6 +88,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from parley_sim import envs
 from parley_sim.core.protocol import JSON, Seat
+from parley_sim.core.rng import secret_seed
 from parley_sim.drivers.local import scripted_policies
 from parley_sim.drivers.models import (
     Breaker,
@@ -176,6 +178,16 @@ class ParleySimEnvironmentServerConfig(BaseEnvironmentServerConfig):
     allowed_env_paths: list[str] = Field(default_factory=list)
     # Merged into every Responses API request (e.g. {"reasoning": {"effort": "low"}}).
     responses_create_params: dict[str, Any] = Field(default_factory=dict)
+    # Name of an environment variable holding a secret that keys task seeds into
+    # scenario seeds, so an agent can't compute or look up its scenario from the
+    # (public, deterministic) generator. Rows with the same seed still pair up.
+    seed_secret_env: str | None = None
+
+    @model_validator(mode="after")
+    def _seed_secret_is_set(self) -> Self:
+        if self.seed_secret_env and not os.environ.get(self.seed_secret_env):
+            raise ValueError(f"seed_secret_env names {self.seed_secret_env!r}, which is not set")
+        return self
 
     @model_validator(mode="after")
     def _counterparts_are_agent_refs(self) -> Self:
@@ -398,7 +410,9 @@ class ParleySimEnvironmentServer(
                 raise ValueError(f"reward_metric {self.config.reward_metric!r} is not one of "
                                  f"{sorted(entry.metric_kinds)}")
             focal = task.focal_seat or entry.focal_seat
-            spec = EpisodeSpec(seed=task.seed, seats=task.seats, config=task.env_config,
+            secret = os.environ.get(self.config.seed_secret_env or "") or None
+            spec = EpisodeSpec(seed=secret_seed(secret, task.seed) if secret else task.seed,
+                               seats=task.seats, config=task.env_config,
                                focal_seat=focal, arm=task.arm, pair_key=task.pair_key,
                                cell_key=task.cell_key, replicate=task.replicate)
             episode = Episode(entry.env(), spec, scripted_policies(entry, spec))

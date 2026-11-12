@@ -82,6 +82,7 @@ environment_server_routes:   # taskset -> environment server
 | `max_refusals` | Refusals in one episode before it halts (default 3) |
 | `focal_conversation` | Play the focal seat as one growing conversation (default `true`; see [Training data](#training-data)) |
 | `allowed_env_paths` | Import paths task rows may name as `env` (default none) |
+| `seed_secret_env` | Name of an environment variable holding a secret that keys task seeds into scenario seeds (default none); see [seeds and secrecy](concepts.md#seeds-and-secrecy) |
 | `actor_call_timeout_seconds` | Per-call timeout for agent requests (default 300) |
 | `responses_create_params` | Merged into every Responses API request, e.g. `{reasoning: {effort: low}}` |
 
@@ -241,7 +242,11 @@ time from the end of the last `reset` or `step`, not its start, so a step sent
 just before the deadline can still be closed while a counterpart is
 answering: keep the timeout well above the longest pause between your
 client's steps plus one counterpart decision. Only `reset` and `step` count
-as activity; a client that only polls `state()` is closed as idle.
+as activity; a client that only polls `state()` is closed as idle. OpenEnv
+0.12 also frees a reaped session's slot while its connection is still open;
+parley-sim closes the environment, so that connection only gets errors.
+Both are OpenEnv bugs, written up with a repro in
+[known issues](known-issues.md#openenv-012-idle-reaper-closes-sessions-mid-step).
 
 A ready-to-build package is in
 [`integrations/openenv/parley_sim_env`](../integrations/openenv/parley_sim_env/README.md),
@@ -283,6 +288,7 @@ The server reads its configuration from environment variables:
 | `MAX_CONCURRENT_ENVS` | `8` | Concurrent sessions |
 | `PARLEY_SESSION_TIMEOUT` | `600` | Close sessions idle this many seconds; at least 2 × the largest seated `timeout_s` |
 | `PARLEY_RELEASE_TRACE` | `after_done` | `after_done`: full trace in `state()` once an episode is done; `never`: focal view plus outcomes and metrics only |
+| `PARLEY_SEED_SECRET` | none | Keys requested seeds into scenario seeds, so a client can't compute a scenario from its seed; use with `PARLEY_RELEASE_TRACE=never` ([seeds and secrecy](concepts.md#seeds-and-secrecy)) |
 
 Provider keys for model counterparts are read from the container's
 environment at runtime
