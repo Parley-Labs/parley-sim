@@ -58,9 +58,10 @@ counterpart's moves, unless the server runs with `PARLEY_RELEASE_TRACE=never`
 (see below).
 
 Play goes through OpenEnv's WebSocket sessions, which `ParleySimEnv` uses. The
-stateless HTTP `/reset`, `/step`, `/state` and `/mcp` routes answer 405: each such call
-would build a fresh environment outside the session limit, idle timeout and
-refusal breaker. `ParleySimEnv` waits up to 300 seconds for each reply (OpenEnv's
+server serves only `/ws`, `/health`, `/schema`, `/metadata` and the API docs.
+The stateless `/reset`, `/step`, `/state` and `/mcp` routes answer 405, and
+OpenEnv's other routes are dropped: each such call would build a fresh
+environment outside the session limit, idle timeout and refusal breaker. `ParleySimEnv` waits up to 300 seconds for each reply (OpenEnv's
 default is 60), because one LLM counterpart turn can take two attempts of its
 `timeout_s` (120 seconds by default). If you raise `timeout_s`, raise it too:
 `ParleySimEnv(base_url=..., message_timeout_s=600)`.

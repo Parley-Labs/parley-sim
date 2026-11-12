@@ -19,8 +19,9 @@ itself.
 
 Play goes only through OpenEnv's WebSocket sessions (`/ws`, which `ParleySimEnv`
 uses), where the session limit, idle timeout and refusal breaker apply. The
-stateless HTTP `/reset`, `/step`, `/state` and `/mcp` routes are disabled, and the
-Gradio web interface is never mounted.
+server serves only `/ws`, `/health`, `/schema`, `/metadata` and the API docs:
+the stateless `/reset`, `/step`, `/state` and `/mcp` routes answer 405, OpenEnv's
+other routes are dropped, and the Gradio web interface is never mounted.
 
 Targets openenv 0.12. A server entry point (OpenEnv's `server/app.py`):
 
@@ -53,17 +54,23 @@ import json
 import logging
 import os
 from collections.abc import Callable
+from importlib.metadata import version
 from typing import Any
 from uuid import uuid4
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from fastapi.routing import APIRoute
 from openenv.core.client_types import StepResult
 from openenv.core.env_client import EnvClient
 from openenv.core.env_server.http_server import create_fastapi_app
 from openenv.core.env_server.interfaces import Environment
-from openenv.core.env_server.types import Action, ConcurrencyConfig, Observation, State
+from openenv.core.env_server.types import (
+    Action,
+    ConcurrencyConfig,
+    EnvironmentMetadata,
+    Observation,
+    State,
+)
 from pydantic import Field, model_validator
 
 from parley_sim import envs
@@ -90,6 +97,13 @@ DEFAULT_MESSAGE_TIMEOUT_S = 300.0
 # Anything a text interface's parse can raise on hostile input: deeply nested
 # JSON overflows the recursion limit, odd types raise TypeError.
 _PARSE_ERRORS = (MalformedOutput, RecursionError, ValueError, TypeError)
+# The only OpenEnv routes served. Everything else it mounts, now or in a later
+# release, is dropped: most of its other routes build an environment (and
+# provider clients) per request, outside the session limit and idle timeout.
+_SERVED_ROUTES = frozenset({"/ws", "/health", "/schema"})
+# FastAPI's own API docs; they build nothing.
+_DOCS_ROUTES = frozenset({"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"})
+# Dropped routes a client is likely to try: they answer 405 and point to /ws.
 _STATELESS_ROUTES = ("/reset", "/step", "/state", "/mcp")
 _log = logging.getLogger(__name__)
 _closing: set[asyncio.Task[None]] = set()  # strong refs to scheduled client closes
@@ -447,7 +461,9 @@ def create_parley_app(*, max_concurrent_envs: int = 8, session_timeout_s: float 
                       **environment_kwargs: Any):
     """An OpenEnv FastAPI app serving ParleySimEnvironment(**environment_kwargs).
 
-    All play goes through WebSocket sessions (`/ws`): the stateless HTTP
+    All play goes through WebSocket sessions (`/ws`). Only `/ws`, `/health`,
+    `/schema`, `/metadata` (answered without building an environment) and the
+    API docs are served; any other OpenEnv route is dropped. The stateless HTTP
     `/reset`, `/step`, `/state` and `/mcp` routes answer 405, since each such call
     would build a fresh environment (new breaker, new provider clients)
     outside the session limit. The Gradio web interface is never mounted,
@@ -478,10 +494,19 @@ def create_parley_app(*, max_concurrent_envs: int = 8, session_timeout_s: float 
                                  max_concurrent_envs=max_concurrent_envs,
                                  session_timeout=session_timeout_s),
                              state_cls=ParleySimState)
+    # An allowlist, not a blocklist: a route OpenEnv adds later stays closed.
     app.router.routes[:] = [r for r in app.router.routes
-                            if not (isinstance(r, APIRoute) and r.path in _STATELESS_ROUTES)]
+                            if getattr(r, "path", None) in _SERVED_ROUTES | _DOCS_ROUTES]
     for path in _STATELESS_ROUTES:
         app.add_api_route(path, _sessions_only, methods=["GET", "POST"], include_in_schema=False)
+    # OpenEnv's /metadata builds (and closes) an environment per request; this
+    # one is answered from the class.
+    metadata = EnvironmentMetadata(name=ParleySimEnvironment.__name__,
+                                   description=f"parley-sim {environment_kwargs.get('env', 'support_desk')} "
+                                               "environment, played over /ws",
+                                   version=version("parley-sim"))
+    app.add_api_route("/metadata", lambda: metadata, methods=["GET"],
+                      response_model=EnvironmentMetadata, tags=["Environment Info"])
     return app
 
 
