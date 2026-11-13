@@ -222,8 +222,9 @@ all its users. If you deploy with `openenv push`, pass `--no-interface`.
 `ParleySimEnv` waits up to 300 seconds for each reply (`message_timeout_s`;
 OpenEnv's default is 60), since one model counterpart turn can take two
 attempts of its `timeout_s` (120 seconds by default). Raise it if you raise
-`timeout_s` or seat more than one model counterpart, since a reply waits for
-all of them. A focal reply may be up to 65,536 characters; a structured `move`
+`timeout_s`, seat more than one model counterpart, or use an environment where
+a counterpart can act several times before your turn: a reply waits for every
+counterpart decision in between. A focal reply may be up to 65,536 characters; a structured `move`
 keeps only the keys the action schema declares.
 
 The configuration (seat labels, lineup names, policies, reward metric,
