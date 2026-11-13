@@ -7,6 +7,11 @@ them.
 
 **Affects:** the OpenEnv adapter (`openenv` 0.12.0, `openenv/core/env_server/http_server.py`).
 
+**Status:** fixed upstream in
+[openenv/OpenEnv#1618](https://github.com/openenv/OpenEnv/pull/1618), merged
+after 0.13.0 and not yet in a release. parley-sim pins `openenv>=0.12,<0.13`,
+so it keeps the workarounds below until it moves to a release with the fix.
+
 OpenEnv's idle reaper closes WebSocket sessions that have been idle longer
 than `ConcurrencyConfig.session_timeout`. Two problems:
 
@@ -86,17 +91,20 @@ With 0.12.0 this prints `observation`, `observation` and `True`: the first
 session was closed mid-step, a second session was admitted over the cap of
 one, and the first session kept stepping.
 
-### Proposed fix (upstream)
+### The upstream fix
 
-- Stamp activity when a `reset` or `step` starts as well as when it ends, and
-  track operations in flight per session; the reaper skips a session with an
-  operation in flight (in both its snapshot and its re-check under the lock).
-- When the reaper destroys a session, end its WebSocket handler too (close
-  the socket with an "idle timeout" reason, or have the handler check that
-  its session still exists before each message), so a released slot can't
-  keep serving.
+- The `/ws` handler counts operations in flight per session and stamps
+  activity when each `reset` or `step` starts and ends; the reaper skips a
+  session with an operation in flight.
+- Before each message, the handler checks that its session still exists. A
+  socket whose session was reaped gets `SESSION_ERROR` and is closed, so a
+  released slot can't keep serving.
 
-### What parley-sim does meanwhile
+OpenEnv's `/mcp` WebSocket route still stamps activity only after a call
+returns. parley-sim's server doesn't serve that route, so this doesn't affect
+it.
+
+### What parley-sim does until then
 
 - `ParleySimEnvironment.close()` marks the environment closed and
   `_advance` checks after every counterpart call, so a session reaped mid-step
