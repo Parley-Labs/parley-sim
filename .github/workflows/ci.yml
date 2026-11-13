@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync --locked --extra openai --extra anthropic --extra openenv
+      - run: uv run ruff check .
+      - run: uv run lint-imports
+      - run: uv run pytest -q
+      - run: uv run parley-sim smoke --seeds 0:3
+
+  gym:
+    # nemo-gym needs Python 3.13.14+ and pins an anthropic SDK that conflicts
+    # with the anthropic extra, so its adapter is tested on its own.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          # An exact patch release: on an older 3.13 the gym extra installs
+          # nothing and the adapter tests skip without failing.
+          python-version: "3.13.14"
+      - run: uv sync --locked --extra gym --extra openai
+      - run: uv run python -c "import nemo_gym"
+      - run: uv run pytest -q tests/test_nemo_gym_adapter.py
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build
+      - run: uvx twine check dist/*
+      - name: List the sdist and run its tests
+        run: |
+          tar -tzf dist/*.tar.gz
+          mkdir "$RUNNER_TEMP/sdist"
+          tar -xzf dist/*.tar.gz -C "$RUNNER_TEMP/sdist"
+          cd "$RUNNER_TEMP"/sdist/parley_sim-*
+          uv run --extra openai --extra anthropic --extra openenv pytest -q

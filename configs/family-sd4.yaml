@@ -1,0 +1,78 @@
+# EXPLORATORY (not pre-registered). Question: do plain LLM customers from
+# other model families open and bargain more variedly than Claude customers,
+# with the same customer prompt and no persona? If so, some of the behavioral
+# variety that personas add can come from choosing the customer model instead.
+#
+# Same seeds and focal agents as equiv-sd3, so the arms join with it:
+#   parley-sim report runs/equiv-sd3 runs/family-sd4
+# Look at the counterpart metrics (cp_opens_with_offer, cp_first_offer_share,
+# cp_max_anchor) and the diversity table (sd_cp_first_offer_share,
+# opening_distinct2), then the outcome metrics as secondary.
+#
+# Customer models: the most capable Muse and Nemotron chat models on OpenRouter
+# with structured-output support at the time of the run (checked in a 2-seed
+# canary first). Header edited after the run; the settings are as run.
+run_id: family-sd4
+env: support_desk
+seeds: 1060:1100
+lineup:
+- name: opus
+  provider: openai_compat
+  model: anthropic/claude-opus-5.5
+  base_url: https://openrouter.ai/api/v1
+  effort: low
+  max_tokens: 8192
+  provider_params: &anthropic
+    extra_body:
+      provider:
+        order:
+        - Anthropic
+        allow_fallbacks: false
+      usage:
+        include: true
+- name: sonnet
+  provider: openai_compat
+  model: anthropic/claude-sonnet-5.5
+  base_url: https://openrouter.ai/api/v1
+  effort: low
+  max_tokens: 8192
+  provider_params: *anthropic
+- name: muse-customer
+  provider: openai_compat
+  model: meta/muse-wonder
+  base_url: https://openrouter.ai/api/v1
+  max_tokens: 8192
+  provider_params: &any_upstream
+    extra_body:
+      provider:
+        require_parameters: true
+      usage:
+        include: true
+- name: nemotron-customer
+  provider: openai_compat
+  model: nvidia/nemotron-3-ultra-550b-a55b
+  base_url: https://openrouter.ai/api/v1
+  max_tokens: 8192
+  provider_params: *any_upstream
+focal_models:
+- opus
+- sonnet
+scripted_counterparts:
+- hardliner
+- reasonable
+- conceder
+adaptive_counterparts:
+- opus
+- sonnet
+extra_arms:
+  muse:
+  - muse-customer
+  nemotron:
+  - nemotron-customer
+run_arms:
+- muse
+- nemotron
+self_null_replicates: 0
+concurrency: 4
+max_total_tokens: 3000000
+max_refusals: 3

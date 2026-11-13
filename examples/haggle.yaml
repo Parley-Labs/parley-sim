@@ -1,0 +1,13 @@
+# Offline run of the example environment: scripted policies on every seat,
+# so it needs no keys. Swap the lineup for real models to make it adaptive.
+#   PYTHONPATH=examples parley-sim matched examples/haggle.yaml --out runs/haggle
+#   PYTHONPATH=examples parley-sim report runs/haggle --env haggle:ENTRY
+run_id: haggle-demo
+env: haggle:ENTRY
+seeds: 0:10
+lineup:
+- {name: seller, provider: scripted, model: flexible}
+- {name: buyer, provider: scripted, model: firm}
+focal_models: [seller]
+scripted_counterparts: [firm, flexible]
+adaptive_counterparts: [buyer]

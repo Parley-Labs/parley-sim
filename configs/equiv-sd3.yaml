@@ -1,0 +1,91 @@
+# PRE-REGISTERED ANALYSIS PLAN: committed before any episode of this run exists.
+#
+# Question: in support_desk, does conditioning an LLM customer on a NeMo UserSim
+# persona change (a) the agent's outcomes or (b) how the customer behaves,
+# relative to a plain LLM customer? Scripted customers are the third arm.
+#
+# Data: fresh seeds 1060-1099 only (40 seeds x 2 agents: Opus 5.5, Sonnet 5.5).
+# pilot-sd2 and usersim-sd2 (seeds 1000-1019) were seen during design and are
+# NOT pooled into this analysis.
+#
+# Analysis command (exactly):
+#   parley-sim report runs/equiv-sd3 --margins focal_surplus_share=0.08,turns=0.8
+#
+# Margins = half the smallest scripted-vs-LLM gap seen in the pilot
+# (surplus share 0.16, turns 1.65): "the persona layer matters less than half
+# as much as replacing scripted customers with LLM customers".
+#
+# H1 (outcome equivalence), per agent, comparison "aoc vs usersim":
+#   equivalent if the 90% CI of the delta lies within +/-margin (TOST, 5%);
+#   different if the 95% CI excludes 0 and |delta| exceeds the noise floor;
+#   otherwise inconclusive. Both focal_surplus_share and turns must be
+#   equivalent for the claim "persona customers produce equivalent agent
+#   outcomes" for that agent.
+# H2 (behavioral diversity), per agent, "aoc vs usersim": persona customers
+#   behave more variedly. Supported if BOTH sd_cp_first_offer_share is lower for
+#   aoc with a 95% CI excluding 0 AND opening_distinct2 is lower for aoc with
+#   permutation p < 0.05.
+# H3 (replication): "aoc vs soc" and "usersim vs soc" on focal_surplus_share are
+#   both "different", in the same direction as the pilot.
+# Report every verdict, including inconclusive ones. No other metric is
+#   confirmatory; everything else in the report is exploratory.
+run_id: equiv-sd3
+env: support_desk
+seeds: 1060:1100
+lineup:
+- name: opus
+  provider: openai_compat
+  model: anthropic/claude-opus-5.5
+  base_url: https://openrouter.ai/api/v1
+  effort: low
+  max_tokens: 8192
+  provider_params: &id001
+    extra_body:
+      provider:
+        order:
+        - Anthropic
+        allow_fallbacks: false
+      usage:
+        include: true
+- name: sonnet
+  provider: openai_compat
+  model: anthropic/claude-sonnet-5.5
+  base_url: https://openrouter.ai/api/v1
+  effort: low
+  max_tokens: 8192
+  provider_params: *id001
+- name: opus-usersim
+  provider: openai_compat
+  model: anthropic/claude-opus-5.5
+  base_url: https://openrouter.ai/api/v1
+  effort: low
+  max_tokens: 8192
+  provider_params: *id001
+  persona: usersim
+- name: sonnet-usersim
+  provider: openai_compat
+  model: anthropic/claude-sonnet-5.5
+  base_url: https://openrouter.ai/api/v1
+  effort: low
+  max_tokens: 8192
+  provider_params: *id001
+  persona: usersim
+focal_models:
+- opus
+- sonnet
+scripted_counterparts:
+- hardliner
+- reasonable
+- conceder
+adaptive_counterparts:
+- opus
+- sonnet
+self_null_replicates: 1
+concurrency: 4
+max_total_tokens: 7000000
+extra_arms:
+  usersim:
+  - opus-usersim
+  - sonnet-usersim
+persona_file: ~/.cache/parley-sim/usersim-en_US.parquet
+max_refusals: 3

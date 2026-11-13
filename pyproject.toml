@@ -1,0 +1,100 @@
+[project]
+name = "parley-sim"
+version = "0.0.1"
+description = "Matched scripted-vs-adaptive counterpart evaluation for LLM agents."
+readme = "README.md"
+license = "Apache-2.0"
+authors = [{ name = "Parley Labs" }]
+keywords = ["llm", "agents", "evaluation", "user-simulation", "negotiation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Parley-Labs/parley-sim"
+Documentation = "https://github.com/Parley-Labs/parley-sim/tree/main/docs"
+Issues = "https://github.com/Parley-Labs/parley-sim/issues"
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.88"]
+openai = ["openai>=1.50"]
+usersim = [
+    "pyarrow>=15",
+    "usersim>=0.3.0,<0.4",
+]
+gym = [
+    "nemo-gym>=0.7,<0.8 ; python_full_version >= '3.13.14'",
+]
+openenv = [
+    "openenv>=0.12,<0.13",
+]
+
+[project.scripts]
+parley-sim = "parley_sim.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "import-linter>=2.0",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/parley_sim"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.importlinter]
+root_package = "parley_sim"
+
+[[tool.importlinter.contracts]]
+name = "Layers"
+type = "layers"
+layers = [
+    "parley_sim.cli",
+    "parley_sim.matched | parley_sim.adapters",
+    "parley_sim.drivers | parley_sim.metrics",
+    "parley_sim.runtime | parley_sim.envs",
+    "parley_sim.trace",
+    "parley_sim.core",
+]
+
+[tool.uv]
+# nemo-gym pins anthropic<=0.109.2; resolve the two extras separately so the
+# anthropic extra is not held back by it.
+conflicts = [[{ extra = "gym" }, { extra = "anthropic" }]]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+extend-exclude = ["integrations/openenv/parley_sim_env/.venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "RUF"]
+# `l` is the house name for a trace line.
+ignore = ["E741"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/parley_sim/envs/support_desk/claims.py" = ["E501"]  # long regex alternations read better whole
+"tests/*" = ["RUF012"]
+
+[tool.hatch.build.targets.sdist]
+# Leading "/" anchors each pattern at the project root; unanchored patterns
+# match at any depth and pull in stray README.md and pyproject.toml files.
+include = [
+  "/src", "/tests", "/docs", "/examples", "/configs", "/integrations",
+  "/README.md", "/LICENSE", "/pyproject.toml",
+]
