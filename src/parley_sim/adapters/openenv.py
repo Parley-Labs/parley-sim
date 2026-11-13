@@ -545,8 +545,9 @@ class ParleySimEnv(EnvClient[ParleySimAction, ParleySimObservation, ParleySimSta
     """OpenEnv client for a parley-sim server. It waits up to
     `message_timeout_s` (default 300 s; OpenEnv's own default is 60 s) for each
     reply, since one counterpart decision can take two attempts of the model's
-    timeout_s (120 s each by default). Raise it if you raise timeout_s or seat
-    more than one model counterpart: a reply waits for all of them."""
+    timeout_s (120 s each by default). Raise it if you raise timeout_s, seat
+    more than one model counterpart, or a counterpart can act several times
+    before the focal turn: a reply waits for every decision in between."""
 
     def __init__(self, base_url: str | None = None, connect_timeout_s: float = 10.0,
                  message_timeout_s: float = DEFAULT_MESSAGE_TIMEOUT_S, **kwargs: Any):

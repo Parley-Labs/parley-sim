@@ -63,8 +63,9 @@ The stateless `/reset`, `/step`, `/state` and `/mcp` routes answer 405, and
 OpenEnv's other routes are dropped: each such call would build a fresh
 environment outside the session limit, idle timeout and refusal breaker. `ParleySimEnv` waits up to 300 seconds for each reply (OpenEnv's
 default is 60), because one LLM counterpart turn can take two attempts of its
-`timeout_s` (120 seconds by default). If you raise `timeout_s` or seat more
-than one model counterpart, raise it too:
+`timeout_s` (120 seconds by default). If you raise `timeout_s`, seat more
+than one model counterpart, or a counterpart can act several times before your
+turn, raise it too:
 `ParleySimEnv(base_url=..., message_timeout_s=600)`.
 
 ## Configure the counterpart
