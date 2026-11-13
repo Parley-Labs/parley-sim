@@ -3,7 +3,7 @@
 # seed's NeMo UserSim persona (persona + OCEAN behavior + interaction style).
 # Personas: `usersim panel --locale en_US --num-personas 200 --out ~/.cache/parley-sim/usersim-en_US.parquet`
 # (NVIDIA dataset licence: never commit that file). Report together with pilot-sd2:
-#   parley-sim report runs/pilot-sd2 runs/usersim-sd2
+#   parley-sim report runs/pilot-sd2 runs/usersim-canary-sd2
 run_id: usersim-canary-sd2
 env: support_desk
 seeds: 1000:1002

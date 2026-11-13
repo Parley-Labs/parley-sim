@@ -4,6 +4,6 @@
 __pycache__/
 dist/
 runs/
-# NVIDIA persona rows: licensed for download, not redistribution
+# NVIDIA persona rows: redistribution not clearly covered by their licence
 *.parquet
 .import_linter_cache/

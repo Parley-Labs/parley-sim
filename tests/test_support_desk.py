@@ -93,3 +93,17 @@ def test_text_interface_round_trip():
         text.parse("not json")
     with pytest.raises(MalformedOutput):
         text.parse({"message": "m"})
+
+
+def test_scripted_policy_ignores_observation_key_order():
+    import json
+
+    from parley_sim.core.hashing import canonical_json
+    from parley_sim.envs.support_desk import SupportDesk, make_policy
+    env = SupportDesk()
+    for seed in range(30):
+        state = env.initial_state(env.generate(seed, {}))
+        for name, seat in (("hardliner", "customer"), ("agent_scripted", "agent")):
+            obs = env.observe(state, seat)
+            shuffled = json.loads(canonical_json(obs))
+            assert make_policy(name, seat).decide(obs) == make_policy(name, seat).decide(shuffled)

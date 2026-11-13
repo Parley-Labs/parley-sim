@@ -24,7 +24,7 @@ Documentation = "https://github.com/Parley-Labs/parley-sim/tree/main/docs"
 Issues = "https://github.com/Parley-Labs/parley-sim/issues"
 
 [project.optional-dependencies]
-anthropic = ["anthropic>=0.40"]
+anthropic = ["anthropic>=0.88"]
 openai = ["openai>=1.50"]
 usersim = [
     "pyarrow>=15",
@@ -73,8 +73,8 @@ layers = [
 ]
 
 [tool.uv]
-# nemo-gym pins anthropic<=0.109.2, older than the structured-output API the
-# anthropic seat uses; resolve the two extras separately.
+# nemo-gym pins anthropic<=0.109.2; resolve the two extras separately so the
+# anthropic extra is not held back by it.
 conflicts = [[{ extra = "gym" }, { extra = "anthropic" }]]
 
 [tool.ruff]
@@ -92,4 +92,9 @@ ignore = ["E741"]
 "tests/*" = ["RUF012"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "docs", "examples", "configs", "README.md", "LICENSE", "pyproject.toml"]
+# Leading "/" anchors each pattern at the project root; unanchored patterns
+# match at any depth and pull in stray README.md and pyproject.toml files.
+include = [
+  "/src", "/tests", "/docs", "/examples", "/configs", "/integrations",
+  "/README.md", "/LICENSE", "/pyproject.toml",
+]
