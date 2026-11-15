@@ -51,8 +51,11 @@ def episode_metrics(lines: list[dict[str, Any]]) -> dict[str, float | None]:
     surplus = {s: footer["outcomes"][s] - walk[s] for s in walk}
     deal = footer["final_state"]["deal"] is not None
     focal_decisions = [l for l in lines if l["type"] == "decision" and l["seat"] == focal]
+    # Only the focal seat's own acceptance counts: a focal proposal below its
+    # walk-away that the counterpart accepted depends on the counterpart.
+    accepts = [l for l in lines if l["type"] == "decision" and l["applied"]["move"]["type"] == "accept"]
     accepted_below = deal and footer["final_state"]["end_reason"] == "accepted" and \
-        surplus[focal] < 0
+        bool(accepts) and accepts[-1]["seat"] == focal and surplus[focal] < 0
     return {
         "deal": float(deal),
         "joint_efficiency": sum(surplus.values()) / gt["max_joint_surplus"]

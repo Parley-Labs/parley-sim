@@ -32,6 +32,8 @@ from parley_sim.drivers.models import (
     ModelSpec,
     ProviderClient,
     ScriptedSeat,
+    _is_fatal,
+    aclose_clients,
     build_client,
 )
 from parley_sim.runtime.episode import EpisodeSpec
@@ -324,11 +326,16 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
             return UserSimPersonaText(entry.text(), persona_for_seed(personas, seed))
         return entry.text()
 
+    # One provider client per lineup model for the whole run, closed at the end.
+    clients: dict[str, ProviderClient] = {}
+
     def agent_for(seat: Seat, name: str, seed: int) -> ModelSeat | ScriptedSeat:
         spec = lineup[name]
         if spec.provider == "scripted":
             return ScriptedSeat(spec, text_for(spec, seed), entry.make_policy(spec.model, seat))
-        return ModelSeat(spec, text_for(spec, seed), client_factory(spec), breaker)
+        if name not in clients:
+            clients[name] = client_factory(spec)
+        return ModelSeat(spec, text_for(spec, seed), clients[name], breaker)
 
     async def run_cell(cell: Cell) -> None:
         if cell.cell_key in done:
@@ -359,7 +366,7 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
                     await run_episode(entry, spec, agents, sink=writer)
             except Exception as exc:  # one bad cell never takes down the grid
                 status, error = "errored", repr(exc)
-                if getattr(exc, "status_code", None) in (401, 403):
+                if _is_fatal(exc):
                     # e.g. building a client was refused: as fatal as a refused call
                     breaker.fatal(repr(exc))
             if trace.exists() and trace.stat().st_size == 0:
@@ -380,4 +387,5 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
             append({"type": "halt", "reason": breaker.tripped})
     finally:
         fh.close()
+        await aclose_clients(list(clients.values()))
     return manifest

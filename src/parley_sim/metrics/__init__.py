@@ -70,7 +70,8 @@ def _paired_stat_ci(pairs: list[tuple[Any, Any]], stat, n: int = 2000,
         sample = rng.choices(pairs, k=len(pairs))
         boots.append(stat([b for _, b in sample]) - stat([a for a, _ in sample]))
     boots.sort()
-    return point, boots[int(0.025 * n)], boots[int(0.975 * n) - 1]
+    # round, not int, as in bootstrap_ci
+    return point, boots[round(0.025 * n)], boots[round(0.975 * n) - 1]
 
 
 def _paired_permutation_p(pairs: list[tuple[Any, Any]], stat, n: int = 2000,
@@ -81,12 +82,15 @@ def _paired_permutation_p(pairs: list[tuple[Any, Any]], stat, n: int = 2000,
     if len(pairs) < 3:
         return None, float("nan")
     point = stat([b for _, b in pairs]) - stat([a for a, _ in pairs])
+    if not math.isfinite(point):
+        return point, float("nan")  # undefined (e.g. an arm with no bigrams), not significant
     rng = random.Random(seed)
     hits = 0
     for _ in range(n):
         swapped = [(b, a) if rng.random() < 0.5 else (a, b) for a, b in pairs]
         d = stat([b for _, b in swapped]) - stat([a for a, _ in swapped])
-        hits += abs(d) >= abs(point) - 1e-12
+        # An undefined swap counts against significance.
+        hits += not math.isfinite(d) or abs(d) >= abs(point) - 1e-12
     return point, (hits + 1) / (n + 1)
 
 
@@ -546,7 +550,8 @@ def export_claims(out_dir: str | Path, prefix: str | Path, sample: int = 200,
     rng.shuffle(take)
     prefix = Path(prefix)
     prefix.parent.mkdir(parents=True, exist_ok=True)
-    blind, key = prefix.with_suffix(".blind.csv"), prefix.with_suffix(".key.csv")
+    # Append, not with_suffix: a prefix like "sd3.r1" must keep its ".r1".
+    blind, key = prefix.with_name(prefix.name + ".blind.csv"), prefix.with_name(prefix.name + ".key.csv")
     with blind.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["id", "limit_discount_pct", "limit_credit_usd", "sentence", "human_label"])

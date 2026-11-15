@@ -113,6 +113,10 @@ doesn't involve the withheld arm, with these known differences:
   and 2,340,767 input + 273,647 output tokens (published: 400 cells,
   5,477,709 + 465,346); the joint report to `Cells: done=400` and 3,993,323 +
   1,048,026 (published: 560 cells, 7,130,265 + 1,239,725);
+- `accepted_below_walkaway` now counts only deals the focal seat itself
+  accepted. Opus's scripted arm in `equiv-sd3` (and the joint report) moves
+  from 0.025 to 0: its one case was Opus proposing a deal below its walk-away,
+  which the scripted customer accepted. No verdict changes;
 - the report's layout changed: the diversity table gains an `n_openings`
   column and each comparison its `n`, the acceptance column reads "decisions
   facing an offer", and p-values below 0.001 print as `p<0.001`;

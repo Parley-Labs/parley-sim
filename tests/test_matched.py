@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 
 import pytest
 from pydantic import ValidationError
@@ -367,13 +368,11 @@ class OneCallThenAbort:
     """Answers once (100 input tokens), then fails the episode, so each cell
     ends errored with usage recorded in its trace."""
 
-    def __init__(self):
-        self.calls = 0
-
     async def complete(self, *, system, user, schema, **kw):
         from parley_sim.drivers.models import EpisodeAbort
-        self.calls += 1
-        if self.calls > 1:
+        # The runner shares one client across cells, so tell a later turn of
+        # the same episode by this seat's own earlier reply in the prompt.
+        if '[You] "hm"' in user:
             raise EpisodeAbort("upstream gone", retryable=True)
         reply = {"message": "hm", "move": {"type": "none"}, "explanation": "r"}
         return json.dumps(reply), {"usage": {"input_tokens": 100, "output_tokens": 0}}
@@ -591,3 +590,41 @@ def test_report_json_has_no_nan_for_a_single_pair(tmp_path):
     asyncio.run(run_matched(cfg(seeds="0:1"), tmp_path))
     text = json.dumps(build_report(tmp_path))
     assert "NaN" not in text and "Infinity" not in text
+
+
+def test_undefined_diversity_statistic_is_not_significant():
+    from parley_sim.metrics import _paired_permutation_p, distinct2
+    # One-word openings have no bigrams, so one arm's distinct-2 is undefined.
+    pairs = [("Hi", "a b c"), ("Bye", "d e f"), ("No", "g h i")]
+    point, p = _paired_permutation_p(pairs, distinct2)
+    assert math.isnan(point) and math.isnan(p)
+
+
+
+def test_one_client_per_lineup_model_closed_at_the_end(tmp_path):
+    made = []
+
+    class Closing(SpendsTokens):
+        closed = False
+
+        async def aclose(self):
+            self.closed = True
+
+    def factory(spec):
+        made.append(Closing())
+        return made[-1]
+
+    asyncio.run(run_matched(api_cfg(concurrency=2), tmp_path, client_factory=factory))
+    assert len(made) == 1 and made[0].closed  # api-customer is the only model seat
+
+
+def test_unknown_model_at_client_creation_halts_the_run(tmp_path):
+    def factory(spec):
+        err = RuntimeError("model not found")
+        err.status_code = 404
+        raise err
+
+    asyncio.run(run_matched(api_cfg(concurrency=1), tmp_path, client_factory=factory))
+    _, cells = load_manifest(tmp_path)
+    statuses = [r["status"] for r in cells if r["arm"] == "aoc"]
+    assert statuses[0] == "errored" and set(statuses[1:]) == {"skipped_halted"}

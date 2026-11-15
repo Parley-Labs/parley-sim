@@ -52,7 +52,10 @@ with ParleySimEnv(base_url="http://localhost:8000").sync() as env:
 
 A reply that doesn't parse, or proposes a deal the agent isn't authorized to
 offer, is recorded as a strike and replaced by a no-op move, exactly as in
-parley-sim's own runs. A reply may be up to 65,536 characters. Once the episode
+parley-sim's own runs. A reply may be up to 65,536 characters. If the reward
+metric is undefined for an episode (a share of an offer that was never made),
+the final `result.reward` is `None`: drop the episode rather than scoring it 0.
+Once the episode
 is done, `env.state()` also carries the full episode trace, including the
 counterpart's moves, unless the server runs with `PARLEY_RELEASE_TRACE=never`
 (see below).
