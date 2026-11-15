@@ -3,7 +3,8 @@
 `support_desk` can flag when the agent misstates its own authority: telling
 the customer "the most I can do is 20% off" when it is allowed 30%. These are
 the `limit_claim` and `understated_limit` metrics, tagged
-`intrinsic (experimental)` in every report.
+`intrinsic (experimental)` and shown in a separate section at the end of each
+report, apart from the headline tables.
 
 **Don't quote rates from them as validated.** On held-out data labelled by
 one blind human, the rules caught about 38% of bluffs (95% interval 23 to

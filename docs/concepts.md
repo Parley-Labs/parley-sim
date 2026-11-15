@@ -104,7 +104,8 @@ means:
 | counterpart | How the other side behaved | `cp_opens_with_offer`, `cp_first_offer_share`, `cp_max_anchor` |
 
 A kind ending in `(experimental)` comes from rules that are not yet validated
-well enough to quote as a rate (see [claim metrics](claims.md)).
+well enough to quote as a rate (see [claim metrics](claims.md)); the report
+shows those metrics in their own section, after the headline tables.
 
 Counterpart metrics matter more than they look. If two arms differ on the
 agent's outcome, the counterpart metrics show whether the counterparts
