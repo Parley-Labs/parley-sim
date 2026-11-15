@@ -628,3 +628,28 @@ def test_unknown_model_at_client_creation_halts_the_run(tmp_path):
     _, cells = load_manifest(tmp_path)
     statuses = [r["status"] for r in cells if r["arm"] == "aoc"]
     assert statuses[0] == "errored" and set(statuses[1:]) == {"skipped_halted"}
+
+
+def test_a_crashed_cell_stops_its_siblings_before_clients_close(tmp_path, monkeypatch):
+    import parley_sim.matched as matched
+    state = {"active": 0, "closed_while_active": False}
+
+    class Slow(SpendsTokens):
+        async def complete(self, **kw):
+            state["active"] += 1
+            try:
+                await asyncio.sleep(0.05)
+                return await super().complete(**kw)
+            finally:
+                state["active"] -= 1
+
+        async def aclose(self):
+            state["closed_while_active"] = state["active"] > 0
+
+    def broken_usage(trace):  # fails outside the cell's own error handling
+        raise RuntimeError("disk gone")
+
+    monkeypatch.setattr(matched, "_usage", broken_usage)
+    with pytest.raises(RuntimeError, match="disk gone"):
+        asyncio.run(run_matched(api_cfg(concurrency=4), tmp_path, client_factory=lambda s: Slow()))
+    assert not state["closed_while_active"]
