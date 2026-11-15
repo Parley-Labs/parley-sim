@@ -23,8 +23,9 @@ whether the difference is real, noise, or too close to call.
   declined, is logged and can be replayed through the environment.
 - **Bring your own environment.** Implement a small protocol and the runner,
   report, adapters and traces work unchanged.
-- **Runs where you train.** Adapters for [NeMo Gym](docs/adapters.md#nemo-gym)
-  and [OpenEnv](docs/adapters.md#openenv), including a Docker package.
+- **Runs where you train.** Adapters for [OpenEnv](docs/adapters.md#openenv),
+  including a Docker package, and [NeMo Gym](docs/adapters.md#nemo-gym)
+  (experimental: not yet run against a live Gym deployment or a training run).
 
 Status: pre-release (0.0.1). The API may change before 0.1.
 
@@ -35,9 +36,12 @@ In a pre-registered run on the bundled support-desk environment (Claude Opus
 episodes):
 
 - A plain LLM customer and an LLM customer conditioned on a sampled
-  [NeMo UserSim](https://github.com/NVIDIA-NeMo/UserSim) persona produced
-  **equivalent** results for the agent on the two pre-registered outcomes,
-  surplus share and negotiation length, within margins set in advance.
+  [NeMo UserSim](https://github.com/NVIDIA-NeMo/UserSim) persona gave the
+  agent close outcomes: the agent's surplus share differed by at most 0.041
+  (Opus) and 0.065 (Sonnet) between the two (90% interval), and negotiation
+  length by under a turn. That is inside the margins set in advance, so the
+  pre-registered test calls them equivalent; the 0.08 surplus margin is,
+  though, about three quarters of the scripted-vs-LLM gap seen in this run.
   (Surplus share is the agent's gain as a fraction of the most it could have
   gained.)
 - Persona customers behaved more variedly: different opening offers and more
@@ -49,9 +53,11 @@ episodes):
   replay-to-replay variation, so the pre-registered hypothesis that both LLM
   arms differ from scripted was **not supported**.
 
-This is one small environment with one model family on both sides; read it as
-a worked example of the method. Full numbers, configs and reports are in
-[`results/`](results/README.md).
+This is one small environment, with Claude on both sides of every LLM
+comparison, and a scripted arm made of three bots we wrote: the scripted gap
+measures those bots against Claude, and its size depends on how they were
+tuned. Read it as a worked example of the method. Full numbers, configs and
+reports are in [`results/`](results/README.md).
 
 ## Install
 
@@ -71,7 +77,7 @@ them all in one command:
 | `anthropic` | The Anthropic API |
 | `usersim` | UserSim persona counterparts |
 | `openenv` | The OpenEnv adapter |
-| `gym` | The NeMo Gym adapter (Python 3.13.14 or newer; cannot be combined with `anthropic`) |
+| `gym` | The NeMo Gym adapter, experimental (Python 3.13.14 or newer; cannot be combined with `anthropic`) |
 
 `pip install -e ".[openai,anthropic]"` works too. Python 3.11 or newer.
 

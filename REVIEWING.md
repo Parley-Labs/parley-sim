@@ -97,8 +97,15 @@ needs NVIDIA's persona dataset (see `docs/personas.md`).
   floor (0.093). Is it a reasonable bar, and how should we present it?
 - **The equivalence margin** (0.08) was half the smallest scripted-vs-LLM gap
   in a pilot (0.16). In the confirmatory run that gap was 0.10 to 0.11, so
-  the margin is about three quarters of it. The pilot data is not in this
-  repository.
+  the margin is about three quarters of it, and the docs now lead with H1's
+  interval bounds (0.041 Opus, 0.065 Sonnet) rather than the word. The pilot
+  data is not in this repository.
+- **The scripted arm is three bots we wrote,** so the scripted-vs-LLM gap
+  measures those bots against Claude, and Claude is on both sides of the
+  persona vs plain comparison.
+- **The pre-registration can't be proven from git**, because the history was
+  rewritten before publication (below). Later runs should be registered
+  externally with a timestamp.
 - **Scope.** One small environment, two agents from one model family, Claude
   customers in both LLM arms, 40 seeds, low reasoning effort. Every
   `equiv-sd3` episode ended in a deal, and only 4 Sonnet episodes in
@@ -113,7 +120,8 @@ needs NVIDIA's persona dataset (see `docs/personas.md`).
   held-out round, and the fixed rules are not re-validated. No finding
   depends on it.
 - **Adapters.** The OpenEnv package has been built as a Docker image and
-  played end to end through its WebSocket client. The NeMo Gym adapter has only been tested against the
+  played end to end through its WebSocket client. The NeMo Gym adapter is
+  marked experimental for 0.0.1: it has only been tested against the
   pinned library, not a live Gym deployment; its training payload (the focal
   seat's token-bearing `response`) is tested through Gym's own rollout-record
   code but not through a NeMo-RL training run.

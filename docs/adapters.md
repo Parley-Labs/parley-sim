@@ -30,6 +30,11 @@ welcome.
 
 ## NeMo Gym
 
+**Experimental in 0.0.1.** The adapter is tested against the pinned nemo-gym
+0.7 code, but has not run against a live Gym deployment or through a NeMo-RL
+training run, and each review round so far has found new issues in it.
+Expect changes, and please report what breaks.
+
 Install the `gym` extra from a checkout (`uv sync --extra gym --extra openai`),
 targeting nemo-gym 0.7 (Python 3.13.14 or newer, as nemo-gym requires).
 

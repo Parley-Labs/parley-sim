@@ -445,27 +445,15 @@ def render(report: dict[str, Any]) -> str:
             out += [f"## {focal}", "", "No completed episodes to report.", ""]
             continue
         n_ep = report.get("episodes", {}).get(focal, {})
+        # Experimental metrics get their own section, out of the headline tables.
+        headline = [n for n, k in report["kinds"].items() if "experimental" not in k]
+        experimental = [n for n, k in report["kinds"].items() if "experimental" in k]
         out += [f"## {focal}", "", "Means (replicate 0; episodes per arm: "
                 + ", ".join(f"{a}={n_ep.get(a, '?')}" for a in arms)
                 + "; comparisons use only seeds present in both arms):", "",
-                "| metric | kind | " + " | ".join(arms) + " |",
-                "|---|---|" + "---|" * len(arms)]
-        for name, kind in report["kinds"].items():
-            out.append(f"| {name} | {kind} | "
-                       + " | ".join(_fmt(by_arm[a][name]) for a in arms) + " |")
-        if any("experimental" in k for k in report["kinds"].values()):
-            out += ["", ("_(experimental) metrics come from rules not yet validated against "
-                         "human labels well enough to quote as rates._")]
+                *_means_rows(report, by_arm, arms, headline)]
         for title, table in report["comparisons"][focal].items():
-            out += ["", f"{title}:", "",
-                    "| metric | delta [95% CI] | 90% CI | margin | noise floor | n | verdict |",
-                    "|---|---|---|---|---|---|---|"]
-            for name, m in table.items():
-                lo, hi = m["delta_ci"]
-                lo90, hi90 = m["delta_ci90"]
-                out.append(f"| {name} | {_fmt(m['delta_mean'])} [{_fmt(lo)}, {_fmt(hi)}] "
-                           f"| [{_fmt(lo90)}, {_fmt(hi90)}] | {_fmt(m['margin'])} "
-                           f"| {_fmt(m['noise_floor'])} | {m['n_pairs']} | {m['verdict']} |")
+            out += ["", f"{title}:", "", *_comparison_rows(table, headline)]
         div = report["diversity"].get(focal)
         if div and div["per_arm"]:
             cols = list(next(iter(div["per_arm"].values())))
@@ -489,8 +477,36 @@ def render(report: dict[str, Any]) -> str:
                 for b, v in sorted(table.get(arm, {}).items()):
                     out.append(f"| {arm} | {b} | {v['n']} | {v['accepted']} "
                                f"| {v['accepted'] / v['n']:.2f} |")
+        if experimental:
+            out += ["", ("Experimental metrics. _(experimental) metrics come from rules not yet "
+                         "validated against human labels well enough to quote as rates._"), "",
+                    *_means_rows(report, by_arm, arms, experimental)]
+            for title, table in report["comparisons"][focal].items():
+                out += ["", f"{title}:", "", *_comparison_rows(table, experimental)]
         out.append("")
     return "\n".join(out)
+
+
+def _means_rows(report: dict[str, Any], by_arm: dict[str, Any], arms: list[str],
+                names: list[str]) -> list[str]:
+    return ["| metric | kind | " + " | ".join(arms) + " |", "|---|---|" + "---|" * len(arms),
+            *(f"| {n} | {report['kinds'][n]} | " + " | ".join(_fmt(by_arm[a][n]) for a in arms)
+              + " |" for n in names)]
+
+
+def _comparison_rows(table: dict[str, Any], names: list[str]) -> list[str]:
+    rows = ["| metric | delta [95% CI] | 90% CI | margin | noise floor | n | verdict |",
+            "|---|---|---|---|---|---|---|"]
+    for name in names:
+        if name not in table:
+            continue
+        m = table[name]
+        lo, hi = m["delta_ci"]
+        lo90, hi90 = m["delta_ci90"]
+        rows.append(f"| {name} | {_fmt(m['delta_mean'])} [{_fmt(lo)}, {_fmt(hi)}] "
+                    f"| [{_fmt(lo90)}, {_fmt(hi90)}] | {_fmt(m['margin'])} "
+                    f"| {_fmt(m['noise_floor'])} | {m['n_pairs']} | {m['verdict']} |")
+    return rows
 
 
 CLAIM_LABELS = ("understated", "overstated", "accurate", "none")
