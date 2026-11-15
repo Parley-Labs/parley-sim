@@ -381,11 +381,18 @@ async def run_matched(cfg: MatchedConfig, out_dir: str | Path,
                 spent["tokens"] += _tokens(usage)
                 append(row)
 
+    tasks = [asyncio.create_task(run_cell(c)) for c in cells]
     try:
-        await asyncio.gather(*(run_cell(c) for c in cells))
+        await asyncio.gather(*tasks)
         if breaker.tripped is not None:
             append({"type": "halt", "reason": breaker.tripped})
     finally:
+        # If a cell failed outside its own error handling, stop the others
+        # before closing what they share. A cancelled cell writes no row, so a
+        # resume reruns it.
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         fh.close()
         await aclose_clients(list(clients.values()))
     return manifest
