@@ -121,9 +121,7 @@ class SupportDeskText:
         convo = []
         for e in observation["transcript"]:
             who = "You" if e["seat"] == observation["role"] else "Counterpart"
-            move = e["move"]
-            detail = f" {json.dumps(move['deal'])}" if move["type"] == "propose" else ""
-            convo.append(f"[{who}] \"{e['message']}\" (move: {move['type']}{detail})")
+            convo.append(f"[{who}] {_describe_entry(e)}")
         theirs = observation["their_standing_offer"]
         user = "\n".join([
             "Conversation so far:" if convo else "You speak first.",

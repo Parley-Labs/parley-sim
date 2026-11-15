@@ -146,6 +146,12 @@ def test_export_takes_every_rare_label(tmp_path):
     assert all(int(r["label_total_in_run"]) >= 1 for r in rows)
 
 
+def test_export_keeps_dots_in_the_prefix(tmp_path):
+    asyncio.run(run_matched(bluff_cfg(), tmp_path, client_factory=lambda s: Bluffer()))
+    blind, key, _n = export_claims(tmp_path, tmp_path / "l" / "sd3.r1", sample=4)
+    assert (blind.name, key.name) == ("sd3.r1.blind.csv", "sd3.r1.key.csv")
+
+
 def test_weighted_agreement_needs_every_sampled_label_labelled(tmp_path):
     key = tmp_path / "k.csv"
     blind = tmp_path / "b.csv"

@@ -3,7 +3,9 @@ provider, and parsing the reply (one repair retry on malformed output)."""
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
+import logging
 import os
 import time
 from typing import Any, Literal, Protocol
@@ -12,6 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from parley_sim.core.protocol import JSON, MalformedOutput, Policy, TextInterface
 from parley_sim.runtime.episode import DecisionRequest, DecisionResult
+
+_log = logging.getLogger(__name__)
 
 # "harness": calls are made by an external harness client (e.g. a NeMo Gym agent server).
 Provider = Literal["anthropic", "openai", "openai_compat", "scripted", "harness"]
@@ -252,6 +256,22 @@ def _usage_raw(spec: ModelSpec, text: TextInterface, attempts: list[JSON]) -> JS
     if getattr(text, "meta", None):
         raw["persona"] = text.meta
     return raw
+
+
+async def aclose_clients(clients: list[ProviderClient]) -> None:
+    """Close each provider client: its own aclose/close if it has one, else
+    the SDK client it wraps (`_client`, an AsyncOpenAI or AsyncAnthropic)."""
+    for client in clients:
+        closer = (getattr(client, "aclose", None) or getattr(client, "close", None)
+                  or getattr(getattr(client, "_client", None), "close", None))
+        if closer is None:
+            continue
+        try:
+            result = closer()
+            if inspect.isawaitable(result):
+                await result
+        except Exception as exc:  # best effort: one failure must not keep the others open
+            _log.warning("closing provider client %r failed: %r", client, exc)
 
 
 class ProviderHalted(RuntimeError):

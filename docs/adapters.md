@@ -280,6 +280,10 @@ with ParleySimEnv(base_url="http://localhost:8000").sync() as env:
     print(result.reward, env.state().metrics)
 ```
 
+If the reward metric is undefined for an episode (a share of an offer that was
+never made), the final `result.reward` is `None` rather than 0; drop that
+episode, as the NeMo Gym adapter does.
+
 The server reads its configuration from environment variables:
 
 | Variable | Default | Meaning |

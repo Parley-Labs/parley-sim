@@ -141,9 +141,10 @@ class Episode:
             # move, but one that could never be hashed or written to the trace.
             strike, detail, applied = ("malformed_output",
                                        "action is not encodable as UTF-8 JSON", None)
+        outcome = None
         if applied is not None:
             try:
-                self.env.apply(self.state, req.seat, applied)
+                outcome = self.env.apply(self.state, req.seat, applied)
             except IllegalAction as exc:
                 strike, detail, applied = "illegal_action", str(exc), None
         if applied is None:
@@ -152,14 +153,16 @@ class Episode:
                      submitted=_loggable(result.action), applied=applied,
                      reasoning=_loggable(result.reasoning),
                      explanation=_loggable(result.explanation), strike=strike,
-                     detail=_loggable(detail), raw=_loggable(result.raw))
+                     detail=_loggable(detail), raw=_loggable(result.raw), outcome=outcome)
 
     def _commit(self, seat: Seat, observation: JSON, context: JSON, *, source: str,
                 submitted: JSON | None, applied: JSON, reasoning: str | None,
                 explanation: str | None, strike: str | None, detail: str | None,
-                raw: JSON | None) -> None:
+                raw: JSON | None, outcome: tuple[Any, list[JSON]] | None = None) -> None:
         turn = self.env.turn(self.state)
-        self.state, events = self.env.apply(self.state, seat, applied)
+        # `outcome` is the legality check's own apply of this action, reused.
+        self.state, events = outcome if outcome is not None else \
+            self.env.apply(self.state, seat, applied)
         self._n_decisions += 1
         self._n_strikes += strike is not None
         self._emit({

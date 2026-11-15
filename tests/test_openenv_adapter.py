@@ -82,6 +82,17 @@ def test_model_counterpart_runs_inside_the_environment():
     assert customer[0]["source"] == "external" and customer[0]["raw"]["usage"]["input_tokens"] == 3
 
 
+def test_undefined_reward_is_none_not_zero():
+    # The customer walks away without proposing, so its first-offer share is undefined.
+    env = ParleySimEnvironment(
+        seats={"agent": "client", "customer": "model:peer"},
+        lineup=[{"name": "peer", "provider": "openai_compat", "model": "x"}],
+        reward_metric="cp_first_offer_share", client_factory=lambda spec: Walker())
+    obs = env.reset(seed=1)
+    assert obs.done and obs.metrics["cp_first_offer_share"] is None
+    assert obs.reward is None
+
+
 def test_seats_must_name_the_client_and_step_needs_reset():
     with pytest.raises(ValueError):
         ParleySimEnvironment(seats={"agent": "policy:agent_scripted", "customer": "policy:hardliner"})

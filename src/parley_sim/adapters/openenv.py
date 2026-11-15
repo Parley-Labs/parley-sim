@@ -49,7 +49,6 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import inspect
 import json
 import logging
 import os
@@ -82,6 +81,7 @@ from parley_sim.drivers.models import (
     ModelSpec,
     ProviderClient,
     ScriptedSeat,
+    aclose_clients,
     build_client,
 )
 from parley_sim.runtime.episode import DecisionRequest, DecisionResult, Episode, EpisodeComplete, EpisodeSpec
@@ -284,7 +284,7 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
         connections. OpenEnv calls close() from a worker thread while the
         server's loop runs, or from that loop itself; the sync API has its own
         persistent loop; a client that never ran can close on any loop."""
-        coro = _aclose_all(clients)
+        coro = aclose_clients(clients)
         loop = self._client_loop
         if loop is not None and loop.is_closed():
             loop = None
@@ -446,7 +446,10 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
             reward = metrics.get(self.reward_metric)
             self._state.done, self._state.outcomes, self._state.metrics = (
                 True, dict(event.outcomes), metrics)
-            return ParleySimObservation(done=True, reward=float(reward or 0.0),
+            # An undefined metric (e.g. a share of an offer never made) stays
+            # None: scoring it 0.0 would train on a reward the episode never earned.
+            return ParleySimObservation(done=True,
+                                        reward=None if reward is None else float(reward),
                                         last_strike=strike, outcomes=dict(event.outcomes),
                                         metrics=metrics,
                                         turn=episode.env.turn(episode.state))
@@ -455,22 +458,6 @@ class ParleySimEnvironment(Environment[ParleySimAction, ParleySimObservation, Pa
         return ParleySimObservation(seat=event.seat, turn=event.turn, system_prompt=system,
                                     user_prompt=user, action_schema=self.text.action_schema,
                                     observation=event.observation, last_strike=strike)
-
-
-async def _aclose_all(clients: list[ProviderClient]) -> None:
-    """Close each provider client: its own aclose/close if it has one, else
-    the SDK client it wraps (`_client`, an AsyncOpenAI or AsyncAnthropic)."""
-    for client in clients:
-        closer = (getattr(client, "aclose", None) or getattr(client, "close", None)
-                  or getattr(getattr(client, "_client", None), "close", None))
-        if closer is None:
-            continue
-        try:
-            result = closer()
-            if inspect.isawaitable(result):
-                await result
-        except Exception as exc:  # best effort: one failure must not keep the others open
-            _log.warning("closing provider client %r failed: %r", client, exc)
 
 
 def _sessions_only(request: Request) -> JSONResponse:
