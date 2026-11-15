@@ -123,9 +123,10 @@ def test_accepted_below_walkaway_counts_only_the_focal_seats_acceptance():
     from pathlib import Path
 
     from parley_sim.envs.support_desk.metrics import episode_metrics
-    # Published episode: Opus proposed a deal below its walk-away and the scripted
-    # customer accepted it. That depends on the customer, so it does not count.
-    trace = Path(__file__).parent.parent / "results/equiv-sd3/traces/equiv-sd3-1072-opus-soc-r0.jsonl"
+    # A copy of a published equiv-sd3 episode (the sdist ships no results/): Opus
+    # proposed a deal below its walk-away and the scripted customer accepted it.
+    # That depends on the customer, so it does not count.
+    trace = Path(__file__).parent / "golden" / "equiv-sd3-1072-opus-soc-r0.jsonl"
     lines = [json.loads(l) for l in trace.read_text().splitlines()]
     assert episode_metrics(lines)["accepted_below_walkaway"] == 0.0
     # Had the agent been the one to accept that deal, it would count.
