@@ -667,3 +667,47 @@ def test_a_crashed_cell_stops_its_siblings_before_clients_close(tmp_path, monkey
         asyncio.run(run_matched(api_cfg(concurrency=64), tmp_path,
                                 client_factory=lambda s: Blocking()))
     assert state["raised_mid_call"] and state["closed"] and state["active_at_close"] == 0
+
+
+def test_margin_rule_averages_replicates_and_uses_the_margin_as_the_bar(tmp_path, monkeypatch):
+    import dataclasses
+
+    import parley_sim.metrics as metrics_mod
+    asyncio.run(run_matched(cfg(), tmp_path))  # soc r0, aoc r0 and r1, seeds 0-3
+    real_resolve = metrics_mod.resolve_env
+
+    def controlled(lines):
+        # aoc's replays wobble +/-0.06 around a true gap of 0.10 over soc.
+        spec = lines[0]["spec"]
+        wobble = 0.06 if spec["seed"] % 2 == 0 else -0.06
+        share = 0.5 if spec["arm"] == "soc" else 0.6 + (wobble if spec["replicate"] == 0 else -wobble)
+        return {"focal_surplus_share": share}
+
+    def resolve(*a, **kw):
+        entry = real_resolve(*a, **kw)
+        kinds = {"focal_surplus_share": entry.metric_kinds["focal_surplus_share"]}
+        return dataclasses.replace(entry, episode_metrics=controlled, metric_kinds=kinds)
+
+    monkeypatch.setattr(metrics_mod, "resolve_env", resolve)
+    margins = {"focal_surplus_share": 0.08}
+    floor_rule = build_report(tmp_path, margins=margins)
+    margin_rule = build_report(tmp_path, margins=margins, rule="margin")
+    old = next(iter(floor_rule["comparisons"].values()))["aoc vs soc"]["focal_surplus_share"]
+    new = next(iter(margin_rule["comparisons"].values()))["aoc vs soc"]["focal_surplus_share"]
+    # Replicate 0 alone: a mean gap of 0.10 under a 0.12 floor is not "different".
+    assert old["delta_mean"] == pytest.approx(0.10) and old["noise_floor"] == pytest.approx(0.12)
+    assert old["verdict"] == "inconclusive"
+    # Averaged replicates: the gap is exactly 0.10, at least the 0.08 margin.
+    assert new["delta_ci"] == [pytest.approx(0.10), pytest.approx(0.10)]
+    assert new["verdict"] == "different" and margin_rule["verdict_rule"] == "margin"
+    with pytest.raises(ValueError, match="verdict rule"):
+        build_report(tmp_path, rule="floor")
+
+
+def test_cli_report_takes_a_verdict_rule(tmp_path, capsys):
+    from parley_sim import cli
+    asyncio.run(run_matched(cfg(), tmp_path))
+    assert cli.main(["report", str(tmp_path), "--verdict-rule", "margin"]) == 0
+    assert "Verdict rule: margin" in capsys.readouterr().out
+    assert cli.main(["report", str(tmp_path)]) == 0
+    assert "Verdict rule" not in capsys.readouterr().out  # the default prints as before

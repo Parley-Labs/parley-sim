@@ -69,7 +69,7 @@ Each comparison reports, per metric:
 | n | Number of matched pairs |
 | verdict | See below |
 
-The verdict rules:
+The verdict rules, under the default `noise-floor` rule:
 
 - **equivalent**: a margin was given and the 90% interval lies entirely
   within plus or minus the margin (two one-sided tests at 5%);
@@ -77,6 +77,21 @@ The verdict rules:
   is larger than the noise floor;
 - **inconclusive**: a margin was given and neither of the above holds;
 - **-**: no margin was given and the difference is not established.
+
+`parley-sim report --verdict-rule margin` changes two things. Each seed's
+replicates are averaged before pairing, so replay noise is part of the
+interval instead of a separate bar. And **different** needs the 95% interval
+to exclude zero and the mean difference to be at least the margin, so the
+margin is the smallest effect that counts both ways (with no margin, an
+interval excluding zero is enough). The noise floor is still shown, but no
+longer decides anything.
+
+Why the margin rule exists: the noise floor is the wobble of a single
+episode, but it is compared with a mean over many seeds, which wobbles about
+√n times less. At 40 seeds that makes the bar roughly 7 times the noise it
+stands for, and the gap grows with n. `noise-floor` stays the default
+because `equiv-sd3` pre-registered it; pre-register the rule you use for a
+new study before running it.
 
 The rules are checked in that order, so a difference that is inside the
 margin is reported as equivalent even if its interval also excludes zero.

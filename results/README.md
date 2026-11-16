@@ -63,6 +63,35 @@ Three caveats a reader should weigh:
   publication, so commit dates no longer show the order. Later runs should be
   registered somewhere external with a timestamp.
 
+### Re-analysis with the margin rule (exploratory)
+
+The noise floor is a single episode's replay wobble, compared against a mean
+over 40 seeds, which wobbles about √40 times less: a bar roughly seven times
+the noise it stands for. `parley-sim report --verdict-rule margin` averages
+each seed's two replays instead, and calls a difference "different" when its
+95% interval excludes zero and it is at least the 0.08 margin
+([verdict rules](../docs/concepts.md#verdicts)). Re-running
+the same episodes through it, with no new runs
+([`report-margin-rule.md`](equiv-sd3/report-margin-rule.md)):
+
+| Comparison (surplus share) | Pre-registered rule | Margin rule |
+| --- | --- | --- |
+| H1, plain vs persona | equivalent (both agents) | equivalent (both agents), narrower intervals |
+| H3, Opus plain vs scripted | different (+0.113) | different (+0.121) |
+| H3, Opus persona vs scripted | inconclusive (+0.105, floor 0.106) | **different** (+0.117) |
+| H3, Sonnet plain vs scripted | different (+0.102) | different (+0.083) |
+| H3, Sonnet persona vs scripted | inconclusive (+0.080, floor 0.082) | inconclusive (+0.077, under the 0.08 margin) |
+
+Turns are "different" for every LLM vs scripted comparison under both rules.
+
+Under the margin rule, H3 holds for Opus but not for Sonnet, whose persona gap
+sits just under the margin. **This does not replace the pre-registered
+result above**, which used the floor rule as committed: the rule was chosen
+after seeing the data, so this is a sensitivity check, not a confirmatory
+finding. The scripted arm has one replay per seed, so averaging reduces noise
+only on the LLM side. A future study should pre-register the margin rule
+before running.
+
 ## family-sd4 (exploratory)
 
 Muse (`meta/muse-wonder`) and Nemotron (`nvidia/nemotron-3-ultra-550b-a55b`)
