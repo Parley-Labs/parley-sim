@@ -632,24 +632,38 @@ def test_unknown_model_at_client_creation_halts_the_run(tmp_path):
 
 def test_a_crashed_cell_stops_its_siblings_before_clients_close(tmp_path, monkeypatch):
     import parley_sim.matched as matched
-    state = {"active": 0, "closed_while_active": False}
+    from parley_sim.drivers.models import EpisodeAbort
+    real_usage = matched._usage
+    state = {"active": 0, "calls": 0, "raised_mid_call": False, "closed": False,
+             "active_at_close": None}
 
-    class Slow(SpendsTokens):
+    class Blocking(SpendsTokens):
         async def complete(self, **kw):
+            state["calls"] += 1
+            first = state["calls"] == 1
             state["active"] += 1
             try:
-                await asyncio.sleep(0.05)
-                return await super().complete(**kw)
+                if first:
+                    # End this cell only once another cell's call is running.
+                    while state["active"] < 2:
+                        await asyncio.sleep(0.01)
+                    raise EpisodeAbort("this cell ends", retryable=False)
+                await asyncio.sleep(30)  # held open until the run cancels it
             finally:
                 state["active"] -= 1
 
         async def aclose(self):
-            state["closed_while_active"] = state["active"] > 0
+            state["closed"] = True
+            state["active_at_close"] = state["active"]
 
-    def broken_usage(trace):  # fails outside the cell's own error handling
-        raise RuntimeError("disk gone")
+    def usage_failing_mid_call(trace):  # fails outside the cell's own error handling
+        if state["active"]:
+            state["raised_mid_call"] = True
+            raise RuntimeError("disk gone")
+        return real_usage(trace)
 
-    monkeypatch.setattr(matched, "_usage", broken_usage)
+    monkeypatch.setattr(matched, "_usage", usage_failing_mid_call)
     with pytest.raises(RuntimeError, match="disk gone"):
-        asyncio.run(run_matched(api_cfg(concurrency=4), tmp_path, client_factory=lambda s: Slow()))
-    assert not state["closed_while_active"]
+        asyncio.run(run_matched(api_cfg(concurrency=64), tmp_path,
+                                client_factory=lambda s: Blocking()))
+    assert state["raised_mid_call"] and state["closed"] and state["active_at_close"] == 0

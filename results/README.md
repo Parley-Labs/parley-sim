@@ -27,7 +27,7 @@ persona (`usersim`), and plain Claude (`aoc`). Margins: 0.08 surplus share,
 
 | Hypothesis | Result |
 | --- | --- |
-| H1: plain and persona customers give equivalent agent outcomes | **Supported** for both agents. The plain vs persona difference in surplus share is at most 0.041 (Opus, 90% interval -0.023 to +0.041) and 0.065 (Sonnet, -0.022 to +0.065), inside the ±0.08 margin; turns within ±0.8 (Opus -0.65 to 0.00, Sonnet -0.63 to +0.10) |
+| H1: plain and persona customers give equivalent agent outcomes | **Supported** for both agents. The 90% intervals for the plain vs persona difference in surplus share, -0.023 to +0.041 (Opus) and -0.022 to +0.065 (Sonnet), lie inside the ±0.08 margin; turns within ±0.8 (Opus -0.65 to 0.00, Sonnet -0.63 to +0.10) |
 | H2: persona customers behave more variedly | **Supported** for both agents. First-offer spread 0.26 to 0.29 against 0 for plain customers; opening-message wording more varied (permutation p ≈ 0.001 or below) |
 | H3: both LLM arms differ from scripted on surplus share | **Not supported as pre-registered.** Plain LLM vs scripted is different (+0.11 Opus, +0.10 Sonnet). Persona vs scripted (+0.105, +0.080) has an interval excluding zero but sits just under its noise floor (0.106, 0.082), so the rule calls it inconclusive |
 
@@ -50,8 +50,8 @@ Three caveats a reader should weigh:
 - **The margin was set from the pilot.** 0.08 was half the smallest
   scripted-vs-LLM gap in the pilot (0.16). In this run that gap was smaller
   (0.10 to 0.11), so 0.08 is about three quarters of it. Read H1 by its
-  interval bounds (0.041 for Opus, 0.065 for Sonnet) more than by the word
-  "equivalent".
+  intervals (upper bounds 0.041 for Opus, 0.065 for Sonnet) more than by the
+  word "equivalent".
 - **The scripted arm is three bots we wrote,** and the LLM customers are
   Claude, as are the agents. The scripted-vs-LLM gap measures those bots
   against Claude, and depends on how the bots were tuned; the persona vs plain

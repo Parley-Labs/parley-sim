@@ -98,7 +98,7 @@ needs NVIDIA's persona dataset (see `docs/personas.md`).
 - **The equivalence margin** (0.08) was half the smallest scripted-vs-LLM gap
   in a pilot (0.16). In the confirmatory run that gap was 0.10 to 0.11, so
   the margin is about three quarters of it, and the docs now lead with H1's
-  interval bounds (0.041 Opus, 0.065 Sonnet) rather than the word. The pilot
+  90% intervals (upper bounds 0.041 Opus, 0.065 Sonnet) rather than the word. The pilot
   data is not in this repository.
 - **The scripted arm is three bots we wrote,** so the scripted-vs-LLM gap
   measures those bots against Claude, and Claude is on both sides of the

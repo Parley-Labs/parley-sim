@@ -37,11 +37,12 @@ episodes):
 
 - A plain LLM customer and an LLM customer conditioned on a sampled
   [NeMo UserSim](https://github.com/NVIDIA-NeMo/UserSim) persona gave the
-  agent close outcomes: the agent's surplus share differed by at most 0.041
-  (Opus) and 0.065 (Sonnet) between the two (90% interval), and negotiation
-  length by under a turn. That is inside the margins set in advance, so the
-  pre-registered test calls them equivalent; the 0.08 surplus margin is,
-  though, about three quarters of the scripted-vs-LLM gap seen in this run.
+  agent close outcomes. The 90% interval for the difference in the agent's
+  surplus share runs from -0.023 to +0.041 (Opus) and from -0.022 to +0.065
+  (Sonnet), and for negotiation length stays within a turn. Both lie inside
+  the margins set in advance, so the pre-registered test calls them
+  equivalent; the 0.08 surplus margin is, though, about three quarters of the
+  scripted-vs-LLM gap seen in this run.
   (Surplus share is the agent's gain as a fraction of the most it could have
   gained.)
 - Persona customers behaved more variedly: different opening offers and more
