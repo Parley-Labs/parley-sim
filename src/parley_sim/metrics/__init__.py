@@ -13,6 +13,10 @@ bootstrap interval, not a standard error.
 With equivalence margins, a comparison also gets a verdict: "equivalent" when
 the 90% interval of the delta lies inside +/- margin (two one-sided tests at
 5%), "different" when it clears its interval and floor, else "inconclusive".
+That is the default `noise-floor` rule. The `margin` rule instead averages
+each seed's replicates before pairing, so replay noise is inside the interval,
+and calls a delta "different" when its 95% interval excludes zero and it is at
+least the margin: the margin is then the smallest effect that counts both ways.
 Diversity compares arms on spread rather than means: the across-seed SD of
 outcome metrics (paired bootstrap interval over seeds) and the
 distinct-bigram ratio of the counterpart's opening messages (paired
@@ -218,10 +222,18 @@ def _check_rotation(cells: dict[tuple[int, str, str, int], dict[str, Any]],
                             "Run these arms over the same seed list.")
 
 
+VERDICT_RULES = ("noise-floor", "margin")
+
+
 def build_report(*out_dirs: str | Path, margins: dict[str, float] | None = None,
-                 env: str | None = None) -> dict[str, Any]:
+                 env: str | None = None, rule: str = "noise-floor") -> dict[str, Any]:
     """`env`: the environment to use when a run's manifest names an import
-    path, which is never imported from the manifest itself (see `resolve_env`)."""
+    path, which is never imported from the manifest itself (see `resolve_env`).
+    `rule`: how comparisons are made and verdicts given (see the module
+    docstring); `noise-floor` is the default and the rule `equiv-sd3`
+    pre-registered."""
+    if rule not in VERDICT_RULES:
+        raise ValueError(f"verdict rule must be one of {', '.join(VERDICT_RULES)}, not {rule!r}")
     margins = margins or {}
     runs, env_name = [], None
     env_entry = envs.get(env, allow_import=True) if env is not None else None
@@ -308,6 +320,16 @@ def build_report(*out_dirs: str | Path, margins: dict[str, float] | None = None,
         c = cells.get((seed, focal, arm, r))
         return None if c is None else c["metrics"][name]
 
+    replicates = sorted({k[3] for k in cells})
+
+    def compared(seed: int, focal: str, arm: str, name: str) -> float | None:
+        """The value a comparison uses: replicate 0, or under the margin rule
+        the mean of every replicate the seed has."""
+        if rule == "noise-floor":
+            return value(seed, focal, arm, 0, name)
+        vals = [v for r in replicates if (v := value(seed, focal, arm, r, name)) is not None]
+        return statistics.fmean(vals) if vals else None
+
     episodes = {focal: {arm: sum(1 for s in seeds if (s, focal, arm, 0) in cells) for arm in arms}
                 for focal in focals}
     means: dict[str, dict[str, dict[str, float | None]]] = {}
@@ -330,8 +352,8 @@ def build_report(*out_dirs: str | Path, margins: dict[str, float] | None = None,
                 table = comparisons[focal][f"{b} vs {a}"] = {}
                 for name, kind in entry.metric_kinds.items():
                     deltas = [vb - va for s in seeds
-                              if (va := value(s, focal, a, 0, name)) is not None
-                              and (vb := value(s, focal, b, 0, name)) is not None]
+                              if (va := compared(s, focal, a, name)) is not None
+                              and (vb := compared(s, focal, b, name)) is not None]
                     lo, hi = bootstrap_ci(deltas)
                     lo90, hi90 = bootstrap_ci(deltas, level=0.90)
                     delta = _mean(deltas)
@@ -340,9 +362,15 @@ def build_report(*out_dirs: str | Path, margins: dict[str, float] | None = None,
                     floor = max(fl) if fl else None
                     # Fewer than two pairs give a NaN interval, which clears nothing.
                     has_ci = not (math.isnan(lo) or math.isnan(hi))
-                    clears = has_ci and not (lo <= 0 <= hi) and (
-                        floor is None or abs(delta) > floor)
                     margin = margins.get(name)
+                    if rule == "noise-floor":
+                        bar = floor
+                        clears = has_ci and not (lo <= 0 <= hi) and (
+                            bar is None or abs(delta) > bar)
+                    else:  # the margin is the smallest effect that counts
+                        bar = margin
+                        clears = has_ci and not (lo <= 0 <= hi) and (
+                            bar is None or abs(delta) >= bar)
                     if margin is not None and has_ci and -margin <= lo90 and hi90 <= margin:
                         verdict = "equivalent"
                     elif clears:
@@ -402,7 +430,7 @@ def build_report(*out_dirs: str | Path, margins: dict[str, float] | None = None,
             "cells": dict(status_counts), "spend": spend, "arms": arms,
             "kinds": dict(entry.metric_kinds), "episodes": episodes, "means": means, "noise_floors": floors,
             "comparisons": comparisons, "diversity": diversity, "margins": margins,
-            "acceptance_by_offer_quality": acceptance})
+            "verdict_rule": rule, "acceptance_by_offer_quality": acceptance})
 
 
 def _json_safe(obj: Any) -> Any:
@@ -439,7 +467,11 @@ def render(report: dict[str, Any]) -> str:
     out = [f"# {' + '.join(report['run_ids'])} ({report['env']})", "",
            "Cells: " + ", ".join(f"{k}={v}" for k, v in sorted(report["cells"].items())),
            "Spend: {input_tokens:,} input + {output_tokens:,} output tokens, "
-           "${cost_usd:.2f} reported by provider".format(**report["spend"]), ""]
+           "${cost_usd:.2f} reported by provider".format(**report["spend"])]
+    if report.get("verdict_rule") == "margin":
+        out.append("Verdict rule: margin (replicates averaged per seed; \"different\" needs "
+                   "a 95% interval excluding zero and a delta of at least the margin)")
+    out.append("")
     for focal, by_arm in report["means"].items():
         if not arms:
             out += [f"## {focal}", "", "No completed episodes to report.", ""]
@@ -448,9 +480,11 @@ def render(report: dict[str, Any]) -> str:
         # Experimental metrics get their own section, out of the headline tables.
         headline = [n for n, k in report["kinds"].items() if "experimental" not in k]
         experimental = [n for n, k in report["kinds"].items() if "experimental" in k]
+        pooled = report.get("verdict_rule") == "margin"
         out += [f"## {focal}", "", "Means (replicate 0; episodes per arm: "
                 + ", ".join(f"{a}={n_ep.get(a, '?')}" for a in arms)
-                + "; comparisons use only seeds present in both arms):", "",
+                + "; comparisons use only seeds present in both arms"
+                + (", averaging each seed's replicates" if pooled else "") + "):", "",
                 *_means_rows(report, by_arm, arms, headline)]
         for title, table in report["comparisons"][focal].items():
             out += ["", f"{title}:", "", *_comparison_rows(table, headline)]

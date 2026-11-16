@@ -10,7 +10,14 @@ from pathlib import Path
 
 from parley_sim import envs
 from parley_sim.matched import MatchedConfig, load_config, run_matched
-from parley_sim.metrics import build_report, claims_kappa, export_claims, load_manifest, render
+from parley_sim.metrics import (
+    VERDICT_RULES,
+    build_report,
+    claims_kappa,
+    export_claims,
+    load_manifest,
+    render,
+)
 from parley_sim.runtime.episode import verify
 from parley_sim.trace import read_jsonl_tolerant, read_trace
 
@@ -136,7 +143,7 @@ def cmd_report(args: argparse.Namespace) -> int:
                 if not sep:
                     raise ValueError(f"--margins entries are metric=value, got {kv!r}")
                 margins[k.strip()] = float(v)
-        report = build_report(*args.out, margins=margins, env=args.env)
+        report = build_report(*args.out, margins=margins, env=args.env, rule=args.verdict_rule)
     except ValueError as exc:
         return _fail("report", exc)
     print(json.dumps(report, indent=2) if args.json else render(report))
@@ -198,6 +205,10 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.add_parser("report", help="paired report across arms for one or more run directories")
     r.add_argument("out", nargs="+")
     r.add_argument("--margins", help="equivalence margins, e.g. focal_surplus_share=0.08,turns=0.8")
+    r.add_argument("--verdict-rule", choices=VERDICT_RULES, default="noise-floor",
+                   help="noise-floor (default; the rule equiv-sd3 pre-registered) or margin "
+                        "(replicates averaged per seed; the margin is the smallest effect "
+                        "that counts as different)")
     r.add_argument("--json", action="store_true")
     r.add_argument("--env", help=_ENV_HELP)
     r.set_defaults(func=cmd_report)

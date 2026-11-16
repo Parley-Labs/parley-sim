@@ -13,8 +13,9 @@ whether the difference is real, noise, or too close to call.
   kind of counterpart, so a difference comes from the counterpart, not the
   scenario.
 - **A measured noise floor.** Each adaptive cell is replayed with an identical
-  setup. A difference only counts when it is larger than that replay-to-replay
-  variation.
+  setup. By default a difference only counts when it is larger than that
+  replay-to-replay variation; `--verdict-rule margin` instead averages the
+  replays and uses your margin as the smallest difference that counts.
 - **Equivalence, not just difference.** Give a margin and get a verdict per
   metric: equivalent, different or inconclusive.
 - **Judge-free metrics.** Outcomes are computed from the environment's state
@@ -52,7 +53,10 @@ episodes):
   negotiations ran longer, than against plain LLM customers. Persona
   customers pointed the same way, but that gap was no larger than
   replay-to-replay variation, so the pre-registered hypothesis that both LLM
-  arms differ from scripted was **not supported**.
+  arms differ from scripted was **not supported**. Re-analysed afterwards with
+  a less conservative rule that averages the replays (exploratory, not
+  pre-registered), Opus's persona gap counts as different too; Sonnet's, just
+  under the margin, still does not.
 
 This is one small environment, with Claude on both sides of every LLM
 comparison, and a scripted arm made of three bots we wrote: the scripted gap
@@ -171,7 +175,7 @@ show the method, and to be replaced by yours.
 | --- | --- |
 | `parley-sim smoke` | Offline end-to-end check, no keys |
 | `parley-sim matched CONFIG --out DIR` | Run (or resume) a matched grid; exits 1 if any cell errored, 2 if the run halted |
-| `parley-sim report DIR... [--margins k=v,...] [--json] [--env NAME]` | Paired report across one or more run directories |
+| `parley-sim report DIR... [--margins k=v,...] [--verdict-rule noise-floor\|margin] [--json] [--env NAME]` | Paired report across one or more run directories |
 | `parley-sim verify TRACE... [--env NAME]` | Replay traces through the environment and check every logged field |
 | `parley-sim claims DIR --prefix P [--env NAME]` | Export a blind sample of agent claims for labelling |
 

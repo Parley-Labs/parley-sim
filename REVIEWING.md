@@ -94,7 +94,11 @@ needs NVIDIA's persona dataset (see `docs/personas.md`).
   and it is conservative, but it decides H3 by 0.001 to 0.002, while the
   floor's own bootstrap interval is about ±0.03. Sonnet's plain-LLM
   "different" also depends on the replicate: on r1 it is +0.064, under the
-  floor (0.093). Is it a reasonable bar, and how should we present it?
+  floor (0.093). After review, `--verdict-rule margin` averages the replicates
+  and uses the margin as the bar instead; `results/README.md` re-analyses
+  `equiv-sd3` with it as an exploratory check (H3 then holds for Opus, not
+  Sonnet). The pre-registered verdicts are unchanged. Is that the right way
+  to present it?
 - **The equivalence margin** (0.08) was half the smallest scripted-vs-LLM gap
   in a pilot (0.16). In the confirmatory run that gap was 0.10 to 0.11, so
   the margin is about three quarters of it, and the docs now lead with H1's
