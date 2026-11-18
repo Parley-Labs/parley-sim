@@ -1,0 +1,9 @@
+*.egg-info/
+.pytest_cache/
+.venv/
+__pycache__/
+dist/
+runs/
+# NVIDIA persona rows: redistribution not clearly covered by their licence
+*.parquet
+.import_linter_cache/

@@ -1,0 +1,155 @@
+# Configuration
+
+A run is one YAML file passed to `parley-sim matched CONFIG --out DIR`. The
+bundled `configs/` folder has working examples: `pilot.yaml` (two arms),
+`equiv-sd3.yaml` (three arms, pre-registered) and `family-sd4.yaml` (extra
+arms run into their own directory).
+
+## Run fields
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `run_id` | required | Name for the run; prefixes every cell key |
+| `env` | `support_desk` | Environment name, or an import path such as `my_pkg.envs:ENTRY` (see [your own environment](custom-environments.md)) |
+| `env_config` | `{}` | Options passed to the environment, e.g. `{max_turns: 10}` for `support_desk` |
+| `seeds` | required | Half-open range `start:stop`, e.g. `1000:1040` for 40 scenarios |
+| `focal_seat` | the env's default | Which seat is under test (`agent` in `support_desk`) |
+| `lineup` | required | Model specs, below |
+| `focal_models` | required | Lineup names to evaluate in the focal seat; each gets its own grid |
+| `scripted_counterparts` | required | Policy names for the `soc` arm |
+| `adaptive_counterparts` | required | Lineup names for the `aoc` arm |
+| `extra_arms` | `{}` | More model-counterpart arms, `{arm_name: [lineup names]}` |
+| `run_arms` | all | Only run these arms; the rest can live in another directory |
+| `persona_file` | none | Persona panel for lineup entries with `persona: usersim` ([personas](personas.md)) |
+| `self_null_replicates` | `1` | Identical replays of each model-counterpart cell, for the noise floor; `0` skips them |
+| `concurrency` | `4` | Episodes in flight at once |
+| `max_total_tokens` | none | Token cap (input + output) across the run, checked as each episode starts; see below |
+| `max_refusals` | `3` | Halt the whole run after this many provider refusals |
+
+The grid size is seeds × focal models × (1 for `soc` + model arms × (1 +
+`self_null_replicates`)), counting only the arms in `run_arms` when it is set.
+`family-sd4.yaml`, for example, runs only its 2 model arms (`run_arms`), with
+40 seeds, 2 focal models and no replicates: 40 × 2 × 2 = 160 episodes.
+
+## Model specs
+
+Each `lineup` entry:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `name` | required | How the config refers to it |
+| `provider` | required | `anthropic`, `openai`, `openai_compat`, `scripted`, or `harness` (NeMo Gym adapter only; refused in a `matched` config) |
+| `model` | required | The provider's model ID (for `scripted`, a policy name) |
+| `base_url` | none | For `openai_compat`: the gateway, e.g. `https://openrouter.ai/api/v1` |
+| `api_key_env` | per provider | Environment variable holding the key |
+| `temperature` | omitted | Sent only if set; not accepted for `anthropic` |
+| `effort` | omitted | Reasoning effort: `low`, `medium`, `high`, `xhigh`, `max` |
+| `max_tokens` | `4096` | Output cap per call |
+| `timeout_s` | `120` | Per-call timeout |
+| `provider_params` | none | Merged into the request last, e.g. OpenRouter routing |
+| `persona` | none | `usersim` conditions this seat on a UserSim persona |
+| `conversation` | `false` | Play the seat as one growing conversation: after the first turn, each prompt is only what changed since the seat last acted, sent after its own earlier replies. Off, every turn is a freshly rendered prompt. The NeMo Gym adapter uses it for the trained seat; turn it on locally to evaluate with the same prompt shape |
+
+### Providers
+
+| Provider | Key variable | Notes |
+| --- | --- | --- |
+| `anthropic` | `ANTHROPIC_API_KEY` | Structured outputs; adaptive thinking with summaries recorded in the trace; `effort` goes to `output_config.effort` |
+| `openai` | `OPENAI_API_KEY` | `response_format` JSON schema; `effort` goes to `reasoning_effort` |
+| `openai_compat` | `OPENROUTER_API_KEY` for `openrouter.ai`; any other host needs `api_key_env` | Any OpenAI-compatible gateway (OpenRouter, vLLM, NIM); `effort` goes to OpenRouter's `reasoning.effort` |
+| `scripted` | none | Plays a named policy through the text interface; for offline tests |
+| `harness` | none | Calls are made by an external harness (used by the NeMo Gym adapter) |
+
+The key is read from `api_key_env` if set, and a key is only ever sent to the
+host it belongs to, over HTTPS (plain `http://` is allowed only to localhost,
+for a local server such as vLLM):
+
+- `openai_compat` requires `base_url`. It reads `OPENROUTER_API_KEY` only
+  when the `base_url` host is `openrouter.ai`; any other gateway (vLLM, NIM,
+  a proxy) requires an explicit `api_key_env`. It never falls back to
+  `OPENAI_API_KEY`;
+- `openai` with a custom `base_url` requires an explicit `api_key_env`, so
+  `OPENAI_API_KEY` is never sent to another host;
+- `openai` and `anthropic` also treat `OPENAI_BASE_URL` and
+  `ANTHROPIC_BASE_URL`, which their SDKs read, as custom endpoints;
+- `anthropic` with a custom `base_url` requires an explicit `api_key_env`;
+- to any `base_url` other than OpenAI's own, the `OpenAI-Organization` and
+  `OpenAI-Project` headers, which the OpenAI SDK fills from `OPENAI_ORG_ID`
+  and `OPENAI_PROJECT_ID`, are not sent;
+- every client fails at startup if its key variable is unset or empty,
+  rather than failing every call, and a variable named in `api_key_env`
+  never falls back to the provider's default one. Behind a proxy that
+  injects the real key, any placeholder value works.
+
+To pin OpenRouter to one upstream and get cost reporting (cost is reported
+only for calls OpenRouter bills; calls made with your own provider key
+through OpenRouter show $0):
+
+```yaml
+provider_params:
+  extra_body:
+    provider: {order: [Anthropic], allow_fallbacks: false}
+    usage: {include: true}
+```
+
+For a model that might not support structured outputs everywhere, use
+`provider: {require_parameters: true}` instead of pinning.
+
+## Safety and spend
+
+- **Refusal breaker.** All seats in a run share a breaker. It trips on any
+  401, 402, 403 or 404 (bad key, no credit, no access, unknown model: every
+  later call would fail too), on Anthropic's "credit balance is too low"
+  (which arrives as a 400), or after `max_refusals` provider refusals.
+  Once tripped, no further model calls are made and cells that have not
+  started are recorded as `skipped_halted`. Cells already running are not
+  cancelled: one that needs another call ends `errored`, and one that needs
+  none can still finish `done`. `matched` exits with code 2 and a
+  `RUN HALTED` message.
+  Repeated refusals can get a provider account suspended; find the cause
+  before re-running.
+- **Rejected requests.** A 400 or 422 means the request itself is wrong (an
+  unsupported parameter, a prompt over the context limit). The episode stops
+  at once and its cell is recorded as `errored` with the provider's message,
+  rather than finishing on fallback moves.
+- **Failed calls.** A timeout or any other provider or network error (429,
+  5xx, a dropped connection) is a strike, and the seat plays the
+  environment's fallback move. If a seat's turns fail this way three times
+  in a row, the episode is aborted and its cell recorded as `errored`,
+  naming the seat and the last error. Errored cells run again on resume.
+- **Truncation.** A reply cut off at `max_tokens` is a `truncated` strike,
+  not malformed output, and gets no repair retry. If a model is often
+  truncated, raise its `max_tokens` (a config change, so a new `--out`).
+- **Usage of failed calls.** Refused calls' tokens and cost are counted in
+  the decision's usage, and so in the token cap. Timed-out and failed calls
+  are recorded as attempts without usage.
+- **Token cap.** With `max_total_tokens`, cells that would start after the
+  cap is reached are recorded as `skipped_budget`. The count includes tokens
+  spent in earlier invocations of the same run, errored cells included (kept
+  in the manifest's `prior_usage`), so re-running cannot spend the cap again.
+  Episodes already running finish, so a run can overshoot by up to
+  `concurrency` episodes. It caps tokens, not money.
+- **Exit codes.** `matched` exits 0 when every cell is done, 1 when any cell
+  errored (each distinct error is printed with its count) or was skipped at
+  the token cap, and 2 when the run halted.
+- **Refusals are strikes, not substitutions.** No client silently falls back
+  to another model, which would contaminate the evaluation.
+
+## Resuming
+
+Run the same command again. A cell is skipped only if the manifest says it is
+done and its trace has a footer; anything else is run again, and the traces
+of cells that are not done are deleted first. A torn last manifest line (a
+crash mid-write) is skipped with a warning and healed. parley-sim refuses to
+resume into a directory created from a different config, so changing the
+experiment means a new `--out`.
+
+## Output directory
+
+| Path | Contents |
+| --- | --- |
+| `manifest.jsonl` | The config, its hash, and one row per cell with status, trace path and usage |
+| `traces/<cell_key>.jsonl` | One trace per episode ([format](concepts.md#traces)) |
+
+Produce the report with `parley-sim report DIR > DIR/report.md`, or
+`--json` for the full structure.

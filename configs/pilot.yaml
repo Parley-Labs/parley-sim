@@ -1,0 +1,30 @@
+# Go/no-go pilot: does support_desk show an SOC/AOC gap that clears the noise floor?
+# 20 seeds x 2 focal models x (1 SOC + 2 AOC) = 120 episodes.
+# Claude via OpenRouter, pinned to Anthropic as the upstream (BYOK), no fallback.
+run_id: pilot-sd2
+env: support_desk
+seeds: "1000:1020"
+lineup:
+  - name: opus
+    provider: openai_compat
+    model: anthropic/claude-opus-5.5
+    base_url: https://openrouter.ai/api/v1
+    effort: low
+    max_tokens: 8192
+    provider_params: &openrouter
+      extra_body:
+        provider: {order: [Anthropic], allow_fallbacks: false}
+        usage: {include: true}
+  - name: sonnet
+    provider: openai_compat
+    model: anthropic/claude-sonnet-5.5
+    base_url: https://openrouter.ai/api/v1
+    effort: low
+    max_tokens: 8192
+    provider_params: *openrouter
+focal_models: [opus, sonnet]
+scripted_counterparts: [hardliner, reasonable, conceder]
+adaptive_counterparts: [opus, sonnet]
+self_null_replicates: 1
+concurrency: 4
+max_total_tokens: 3000000
