@@ -371,7 +371,12 @@ def build_report(*out_dirs: str | Path, margins: dict[str, float] | None = None,
                         bar = margin
                         clears = has_ci and not (lo <= 0 <= hi) and (
                             bar is None or abs(delta) >= bar)
-                    if margin is not None and has_ci and -margin <= lo90 and hi90 <= margin:
+                    equivalent = (margin is not None and has_ci
+                                  and -margin <= lo90 and hi90 <= margin)
+                    # Under the margin rule a delta of at least the margin is
+                    # "different", even on the boundary where its interval also
+                    # touches +/- margin; a delta inside the margin can't clear.
+                    if equivalent and not (rule == "margin" and clears):
                         verdict = "equivalent"
                     elif clears:
                         verdict = "different"
@@ -470,7 +475,8 @@ def render(report: dict[str, Any]) -> str:
            "${cost_usd:.2f} reported by provider".format(**report["spend"])]
     if report.get("verdict_rule") == "margin":
         out.append("Verdict rule: margin (replicates averaged per seed; \"different\" needs "
-                   "a 95% interval excluding zero and a delta of at least the margin)")
+                   "a 95% interval excluding zero and, where a margin is set, a delta of at "
+                   "least the margin in either direction)")
     out.append("")
     for focal, by_arm in report["means"].items():
         if not arms:
