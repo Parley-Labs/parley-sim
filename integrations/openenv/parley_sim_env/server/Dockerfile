@@ -3,10 +3,11 @@
 # Build from the parley-sim repository root (the env installs parley-sim from it
 # until parley-sim is on PyPI):
 #   docker build -f integrations/openenv/parley_sim_env/server/Dockerfile -t parley-sim-env .
+# The server has no authentication: publish the port on localhost only, as below.
 # Run with a scripted customer:
-#   docker run -p 8000:8000 parley-sim-env
+#   docker run -p 127.0.0.1:8000:8000 parley-sim-env
 # Run with an LLM customer (keys are passed at runtime, never baked in):
-#   docker run -p 8000:8000 -e OPENROUTER_API_KEY \
+#   docker run -p 127.0.0.1:8000:8000 -e OPENROUTER_API_KEY \
 #     -e PARLEY_SEATS='{"agent":"client","customer":"model:peer"}' \
 #     -e PARLEY_LINEUP='[{"name":"peer","provider":"openai_compat","model":"anthropic/claude-sonnet-5.5","base_url":"https://openrouter.ai/api/v1"}]' \
 #     parley-sim-env

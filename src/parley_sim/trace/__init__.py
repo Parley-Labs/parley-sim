@@ -11,6 +11,7 @@ fallback, the reason it was taken.
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,7 @@ class JsonlWriter:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._f = self.path.open("w")
+        self._f = self.path.open("w", encoding="utf-8")
 
     def __call__(self, line: dict[str, Any]) -> None:
         self._f.write(canonical_json(line) + "\n")
@@ -41,7 +42,7 @@ class JsonlWriter:
 
 
 def iter_trace(path: str | Path) -> Iterator[dict[str, Any]]:
-    with Path(path).open() as f:
+    with Path(path).open(encoding="utf-8") as f:
         for line in f:
             if line.strip():
                 yield json.loads(line)
@@ -51,9 +52,27 @@ def read_trace(path: str | Path) -> list[dict[str, Any]]:
     return list(iter_trace(path))
 
 
+def read_jsonl_tolerant(path: str | Path) -> list[dict[str, Any]]:
+    """Read an append-only JSONL file (a run manifest) whose writer may have
+    been killed mid-line: an unparsable final line is skipped with a warning
+    on stderr. Any other unparsable line still raises."""
+    with Path(path).open(encoding="utf-8") as f:
+        raw = [line for line in f if line.strip()]
+    rows = []
+    for i, line in enumerate(raw):
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            if i != len(raw) - 1:
+                raise
+            print(f"warning: {path}: skipping a torn last line ({len(line)} bytes)",
+                  file=sys.stderr)
+    return rows
+
+
 def is_complete(path: str | Path) -> bool:
     try:
         lines = read_trace(path)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError, RecursionError):  # JSONDecodeError, UnicodeDecodeError, deep nesting
         return False
     return bool(lines) and lines[-1].get("type") == "footer"

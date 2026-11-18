@@ -30,12 +30,32 @@ counterpart's first message, for wording diversity) and `claim_rows` (for
 
 ## The environment
 
-The protocol is in `parley_sim/core/protocol.py`. The rules that matter:
+The protocol is `Environment` in `parley_sim/core/protocol.py`. An
+environment has two attributes, `name` and `version`, and these methods:
+
+| Method | Returns |
+| --- | --- |
+| `generate(seed, config)` | The scenario (instance) for a seed |
+| `instance_to_json(instance)` | The instance as JSON, recorded in the trace header |
+| `ground_truth(instance)` | Exact quantities your metrics normalise by |
+| `seats(instance)` | The seat names, in order |
+| `initial_state(instance)` | The starting state |
+| `to_act(state)` | The seat that acts next, or `None` once the episode is over |
+| `turn(state)` | The current turn number |
+| `observe(state, seat)` | What that seat sees |
+| `decision_context(state, seat)` | What the decision is answering |
+| `apply(state, seat, action)` | `(new_state, events)` |
+| `fallback_action(state, seat)` | The move applied after an illegal one |
+| `outcome(state)` | `{seat: value}` at the end of the episode |
+| `state_to_json(state)` | The state as JSON, hashed into the trace |
+
+The rules that matter:
 
 - **Pure and sequential.** Exactly one seat acts at a time (`to_act`), and
-  `apply(state, seat, action)` returns a new state without changing the old
-  one. Keep the scenario inside the state rather than on `self`, so any state
-  can be replayed.
+  `apply(state, seat, action)` returns `(new_state, events)` without changing
+  the old state; `events` is a list of JSON objects logged in the trace. Keep
+  the scenario inside the state rather than on `self`, so any state can be
+  replayed.
 - **Seeded.** `generate(seed, config)` must return the same scenario for the
   same seed. Matched pairs and `verify` depend on it.
 - **JSON in, JSON out.** Actions and observations are plain JSON objects, and
@@ -64,11 +84,23 @@ would see. Give your policies a range (in the example, `firm` and
 
 ## The text interface
 
-`render(observation) -> (system, user)` builds the prompt;
-`action_schema` is the JSON schema sent to providers for structured output;
-`parse(payload) -> (action, explanation)` turns the model's reply into an
-action, raising `MalformedOutput` when it can't. Bump `prompt_version`
-whenever the prompt changes: it is recorded in every trace.
+A text interface has:
+
+- `render(observation) -> (system, user)`, which builds the prompt;
+- `action_schema`, the JSON schema sent to providers for structured output;
+- `parse(payload) -> (action, explanation)`, which turns the model's reply
+  into an action, raising `MalformedOutput` when it can't;
+- `prompt_version`. Bump it whenever the prompt changes: it is recorded in
+  every trace.
+
+One method is optional. A seat with `conversation` on (see
+[configuration](configuration.md#model-specs)) plays one growing
+conversation. For it, `render_update(previous, observation, submitted) -> str`
+builds each user message after the first: what changed since the seat's
+previous turn. `submitted` is the action the seat last sent, or `None` when
+its last turn produced no usable reply; restate the seat's own move whenever
+the recorded move differs from it. Without `render_update`, a conversation
+seat gets the full rendered prompt each turn.
 
 Don't ask the model to write out its private reasoning in a schema field.
 Some providers treat that as an attempt to extract reasoning and refuse.
@@ -92,13 +124,17 @@ behaved differently" from "the counterpart behaved differently".
 Three ways, from quickest to most permanent:
 
 1. **Import path in the config:** `env: my_pkg.envs:ENTRY`. The module must
-   be importable (installed, or on `PYTHONPATH`). To replay its traces, pass
-   the same path: `parley-sim verify TRACE --env my_pkg.envs:ENTRY`.
+   be importable (installed, or on `PYTHONPATH`). parley-sim imports a path
+   only when you give it, never when it is read from a trace or manifest,
+   so to report on or replay such a run in a new process pass the same path:
+   `parley-sim report DIR --env my_pkg.envs:ENTRY`,
+   `parley-sim verify TRACE --env my_pkg.envs:ENTRY`. An import path can't
+   reuse the name of a built-in or registered environment.
 2. **Register in code:** `parley_sim.envs.register("my_env", ENTRY)`, then
    `env: my_env`. Useful in notebooks and tests.
 3. **Entry point in your package**, so `env: my_env` works everywhere. Name
-   the entry point after your environment's `name` attribute and `verify`
-   needs no flag either:
+   the entry point after your environment's `name` attribute and `report`
+   and `verify` need no flag either:
 
    ```toml
    [project.entry-points."parley_sim.envs"]

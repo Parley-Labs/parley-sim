@@ -77,3 +77,17 @@ def test_usersim_arm_records_persona_in_trace(tmp_path):
     seats = [l for l in read_trace(trace) if l["type"] == "decision" and l["seat"] == "customer"]
     assert seats and seats[0]["raw"]["persona"]["interaction_style"] == "confrontational"
     assert "+usersim-" in seats[0]["raw"]["prompt_version"]
+
+
+def test_resume_refuses_a_different_persona_panel(tmp_path):
+    path = tmp_path / "p.jsonl"
+    path.write_text(json.dumps({"persona": PERSONA}) + "\n")
+    base = smoke_config("0:2").model_dump()
+    base["lineup"].append({"name": "us-customer", "provider": "scripted", "model": "conceder",
+                           "persona": "usersim"})
+    cfg = MatchedConfig(**{**base, "extra_arms": {"usersim": ["us-customer"]},
+                           "run_arms": ["usersim"], "persona_file": str(path)})
+    asyncio.run(run_matched(cfg, tmp_path / "run"))
+    path.write_text(json.dumps({"persona": {**PERSONA, "first_name": "Other"}}) + "\n")
+    with pytest.raises(RuntimeError, match="different persona panel"):
+        asyncio.run(run_matched(cfg, tmp_path / "run"))

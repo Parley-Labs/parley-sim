@@ -1,6 +1,6 @@
 """Judge-free metrics for one support-desk episode, from the focal seat's view.
 
-Kinds: `intrinsic` is visible from the focal seat's own
+Each metric has a kind: `intrinsic` is visible from the focal seat's own
 actions given what it faced; `relational` only exists through the
 interaction; `covariate` is recorded so differences can be attributed;
 `counterpart` describes how the other side behaved, which is what differs
@@ -51,8 +51,11 @@ def episode_metrics(lines: list[dict[str, Any]]) -> dict[str, float | None]:
     surplus = {s: footer["outcomes"][s] - walk[s] for s in walk}
     deal = footer["final_state"]["deal"] is not None
     focal_decisions = [l for l in lines if l["type"] == "decision" and l["seat"] == focal]
+    # Only the focal seat's own acceptance counts: a focal proposal below its
+    # walk-away that the counterpart accepted depends on the counterpart.
+    accepts = [l for l in lines if l["type"] == "decision" and l["applied"]["move"]["type"] == "accept"]
     accepted_below = deal and footer["final_state"]["end_reason"] == "accepted" and \
-        surplus[focal] < 0
+        bool(accepts) and accepts[-1]["seat"] == focal and surplus[focal] < 0
     return {
         "deal": float(deal),
         "joint_efficiency": sum(surplus.values()) / gt["max_joint_surplus"]
@@ -140,8 +143,13 @@ def claim_rows(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def decision_rows(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Every focal decision taken while facing a standing offer: the offer's
-    quality to the focal seat and whether it was accepted. Declines included."""
+    """One row per focal decision taken while facing a standing offer it was
+    allowed to accept: the offer's quality to the focal seat and whether this
+    decision accepted it. Declines included. Rows count decisions, not
+    distinct offers: an offer that stands while the focal seat acts several
+    times appears once per decision. Offers outside the focal seat's
+    authority are left out, because accepting them is illegal: counting them
+    as declines would bias any arm whose counterpart makes such offers often."""
     header = lines[0]
     focal = _focal(header)
     best = _max_surplus(header, focal)
@@ -151,6 +159,8 @@ def decision_rows(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         ctx = l["context"]
         if ctx.get("standing_offer") is None or not best:
+            continue
+        if ctx.get("standing_offer_authorized") is False:
             continue
         quality = (ctx["standing_offer_value"] - ctx["walkaway_value"]) / best
         rows.append({

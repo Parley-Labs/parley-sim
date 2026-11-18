@@ -12,10 +12,12 @@ the frame covers in its clause. Frames are of two kinds:
   can't stack the $25 credit", "$100 is a stretch")
 
 Status: EXPERIMENTAL. Held-out validation against one blind human labeller
-(equiv-sd3 round 2, rules at commit 06dbb6c): kappa 0.64 for bluffs vs other,
-0.66 over all labels; bluff precision 64%, recall about 38%. Three scope bugs
-found there are fixed since, and the fixed rules are not yet re-validated.
-Don't quote rates from these rules as validated.
+(equiv-sd3 round 2, rules at commit 7bc41cf): bluff precision 64% (95%
+interval 47 to 78%), recall about 38% (23 to 75%), bluff-vs-other kappa 0.45
+(0.28 to 0.68), reweighted to the held-out pool (the run minus round 1's 150
+sentences; 0.64 on the stratified sample). Intervals are from a stratified
+bootstrap. Three scope bugs found there are fixed since, and the fixed rules
+are not yet re-validated. Don't quote rates from these rules as validated.
 
 Each amount is labelled against the true limit, independently of billing
 terms or bundles (limits are per term):

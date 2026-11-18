@@ -8,6 +8,7 @@ import itertools
 from typing import Any
 
 from parley_sim.core.protocol import JSON
+from parley_sim.envs.support_desk.scenario import ISSUE_NAMES
 
 VOICES: dict[str, dict[str, str]] = {
     "hardliner": {
@@ -46,6 +47,13 @@ PERSONAS: dict[str, tuple[str, float, float, str]] = {
 }
 
 
+def _issue_order(issues: JSON) -> list[str]:
+    """The env's canonical issue order, so a decision never depends on how the
+    observation's keys happen to be ordered (e.g. after a JSON round trip)."""
+    known = [k for k in ISSUE_NAMES if k in issues]
+    return known + sorted(k for k in issues if k not in known)
+
+
 def describe(deal: JSON) -> str:
     parts = []
     if deal["discount_pct"]:
@@ -72,9 +80,10 @@ class TimeDependent:
         values = priv["option_values"]
         limits = priv.get("authorization_limits", {})
         base = priv.get("base_value_if_customer_stays", 0)
+        names = _issue_order(issues)
         out = []
-        for combo in itertools.product(*issues.values()):
-            deal = dict(zip(issues, combo, strict=False))
+        for combo in itertools.product(*(issues[k] for k in names)):
+            deal = dict(zip(names, combo, strict=True))
             if any(issues[k].index(deal[k]) > issues[k].index(lim) for k, lim in limits.items()):
                 continue
             out.append((base + sum(values[k][str(v)] for k, v in deal.items()), deal))
@@ -111,8 +120,9 @@ class TimeDependent:
         # Trade-off strategy: of the deals that meet the target, offer the one
         # closest to the counterpart's last proposal; then the one keeping least
         # surplus above target.
+        names = _issue_order(issues)
         _value, deal = min(ok, key=lambda x: (distance(x[1]), x[0],
-                                             [issues[k].index(x[1][k]) for k in issues]))
+                                             [issues[k].index(x[1][k]) for k in names]))
         key = "counter" if observation["transcript"] else "open"
         return {"message": self.voice[key].format(deal=describe(deal)),
                 "move": {"type": "propose", "deal": deal}}

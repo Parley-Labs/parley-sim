@@ -93,3 +93,44 @@ def test_text_interface_round_trip():
         text.parse("not json")
     with pytest.raises(MalformedOutput):
         text.parse({"message": "m"})
+
+
+def test_scripted_policy_ignores_observation_key_order():
+    import json
+
+    from parley_sim.core.hashing import canonical_json
+    from parley_sim.envs.support_desk import SupportDesk, make_policy
+    env = SupportDesk()
+    for seed in range(30):
+        state = env.initial_state(env.generate(seed, {}))
+        for name, seat in (("hardliner", "customer"), ("agent_scripted", "agent")):
+            obs = env.observe(state, seat)
+            shuffled = json.loads(canonical_json(obs))
+            assert make_policy(name, seat).decide(obs) == make_policy(name, seat).decide(shuffled)
+
+
+@pytest.mark.parametrize("bad", [{"discount_pct": False}, {"credit_usd": 0.0},
+                                 {"discount_pct": 10.0}, {"discount_pct": True}])
+def test_deal_options_need_their_exact_type(bad):
+    deal = {"discount_pct": 0, "credit_usd": 0, "upgrade": "none", "term": "monthly", **bad}
+    with pytest.raises(ValueError):
+        sc.deal_from_json(deal)
+
+
+def test_accepted_below_walkaway_counts_only_the_focal_seats_acceptance():
+    import copy
+    import json
+    from pathlib import Path
+
+    from parley_sim.envs.support_desk.metrics import episode_metrics
+    # A copy of a published equiv-sd3 episode (the sdist ships no results/): Opus
+    # proposed a deal below its walk-away and the scripted customer accepted it.
+    # That depends on the customer, so it does not count.
+    trace = Path(__file__).parent / "golden" / "equiv-sd3-1072-opus-soc-r0.jsonl"
+    lines = [json.loads(l) for l in trace.read_text().splitlines()]
+    assert episode_metrics(lines)["accepted_below_walkaway"] == 0.0
+    # Had the agent been the one to accept that deal, it would count.
+    swapped = copy.deepcopy(lines)
+    accept = [l for l in swapped if l["type"] == "decision" and l["applied"]["move"]["type"] == "accept"][-1]
+    accept["seat"] = "agent"
+    assert episode_metrics(swapped)["accepted_below_walkaway"] == 1.0
