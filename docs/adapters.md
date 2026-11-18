@@ -196,7 +196,7 @@ rollout record; not yet with a NeMo-RL training run.
 ## OpenEnv
 
 Install the `openenv` extra from a checkout (`uv sync --extra openenv
---extra openai`), targeting openenv 0.12.
+--extra openai`), targeting openenv 0.12 and 0.13.
 
 Your client (a trainer such as TRL's GRPOTrainer, or a script) plays the
 focal seat through `reset` and `step`. Counterparts, scripted or model, run
@@ -247,16 +247,16 @@ if the timeout is shorter than two attempts of each seated model counterpart's
 `timeout_s`. That is a lower bound: it assumes each counterpart decides once
 before control returns to your seat, and an environment where a seat acts
 several times in a row needs more. Leave room for your own model's time per
-turn too. OpenEnv 0.12 counts idle
+turn too. OpenEnv 0.12 and 0.13 count idle
 time from the end of the last `reset` or `step`, not its start, so a step sent
 just before the deadline can still be closed while a counterpart is
 answering: keep the timeout well above the longest pause between your
 client's steps plus the longest whole `reset` or `step`. Only `reset` and `step` count
-as activity; a client that only polls `state()` is closed as idle. OpenEnv
-0.12 also frees a reaped session's slot while its connection is still open;
+as activity; a client that only polls `state()` is closed as idle. They
+also free a reaped session's slot while its connection is still open;
 parley-sim closes the environment, so that connection only gets errors.
 Both are OpenEnv bugs, written up with a repro in
-[known issues](known-issues.md#openenv-012-idle-reaper-closes-sessions-mid-step).
+[known issues](known-issues.md#openenv-012-and-013-idle-reaper-closes-sessions-mid-step).
 
 A ready-to-build package is in
 [`integrations/openenv/parley_sim_env`](../integrations/openenv/parley_sim_env/README.md),

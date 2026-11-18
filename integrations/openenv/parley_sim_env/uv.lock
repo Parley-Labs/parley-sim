@@ -1693,7 +1693,7 @@ wheels = [
 
 [[package]]
 name = "openenv"
-version = "0.12.0"
+version = "0.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastapi" },
@@ -1715,9 +1715,9 @@ dependencies = [
     { name = "uvicorn" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f8/52/94c6c97a53f20626cd5e362df77a37b13b355c950930120075a3ad4ac847/openenv-0.12.0.tar.gz", hash = "sha256:746b8ed689622c6f52449a4fa5609e8495e48b1412806eae467440eb3e1a9231", size = 637832, upload-time = "2026-11-05T06:18:19.66Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c1/05/8b974ed3850344c6ec65d9139f9087c49f6d7ec50f5c76ef0315fb6f79a8/openenv-0.13.0.tar.gz", hash = "sha256:358cd949d5103c73f4c0dcf25f7e693edbbe2f33865b7a6ef6194bb69d709f91", size = 692221, upload-time = "2026-11-12T06:33:50.144Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/31/a7/f9e3fd06a24825776f2a68dd610a2323bdcb1a6e69cdb6be257f2e179c40/openenv-0.12.0-py3-none-any.whl", hash = "sha256:7323218b0b6dc72417c466d3fa84e37feab758be021f53f458cb64464391e15b", size = 745877, upload-time = "2026-11-05T06:18:17.358Z" },
+    { url = "https://files.pythonhosted.org/packages/02/6b/f534473eb87e2746b4ec60e94dfab51b8484528ed8a674edf4ce098ef248/openenv-0.13.0-py3-none-any.whl", hash = "sha256:d5dc26191246242d9b10bc87571de0f62350072502545f2f789fed8b3e056aa4", size = 811183, upload-time = "2026-11-12T06:33:48.294Z" },
 ]
 
 [[package]]
@@ -1740,7 +1740,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115.0" },
-    { name = "openenv", specifier = ">=0.12,<0.13" },
+    { name = "openenv", specifier = ">=0.12,<0.14" },
     { name = "parley-sim", extras = ["openenv", "openai", "anthropic"], directory = "../../../" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
@@ -1920,10 +1920,10 @@ openenv = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.40" },
+    { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.88" },
     { name = "nemo-gym", marker = "python_full_version >= '3.13.14' and extra == 'gym'", specifier = ">=0.7,<0.8" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.50" },
-    { name = "openenv", marker = "extra == 'openenv'", specifier = ">=0.12,<0.13" },
+    { name = "openenv", marker = "extra == 'openenv'", specifier = ">=0.12,<0.14" },
     { name = "pyarrow", marker = "extra == 'usersim'", specifier = ">=15" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pyyaml", specifier = ">=6.0" },

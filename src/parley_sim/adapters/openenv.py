@@ -23,7 +23,7 @@ server serves only `/ws`, `/health`, `/schema`, `/metadata` and the API docs:
 the stateless `/reset`, `/step`, `/state` and `/mcp` routes answer 405, OpenEnv's
 other routes are dropped, and the Gradio web interface is never mounted.
 
-Targets openenv 0.12. A server entry point (OpenEnv's `server/app.py`):
+Targets openenv 0.12 and 0.13. A server entry point (OpenEnv's `server/app.py`):
 
     from parley_sim.adapters.openenv import create_parley_app
 

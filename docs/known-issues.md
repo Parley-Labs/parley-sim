@@ -3,13 +3,13 @@
 Problems outside parley-sim that affect it, with what parley-sim does about
 them.
 
-## OpenEnv 0.12: idle reaper closes sessions mid-step
+## OpenEnv 0.12 and 0.13: idle reaper closes sessions mid-step
 
-**Affects:** the OpenEnv adapter (`openenv` 0.12.0, `openenv/core/env_server/http_server.py`).
+**Affects:** the OpenEnv adapter (`openenv` 0.12.0 and 0.13.0, `openenv/core/env_server/http_server.py`).
 
 **Status:** fixed upstream in
 [openenv/OpenEnv#1618](https://github.com/openenv/OpenEnv/pull/1618), merged
-after 0.13.0 and not yet in a release. parley-sim pins `openenv>=0.12,<0.13`,
+after 0.13.0 and not yet in a release. parley-sim supports `openenv>=0.12,<0.14`,
 so it keeps the workarounds below until it moves to a release with the fix.
 
 OpenEnv's idle reaper closes WebSocket sessions that have been idle longer
@@ -87,7 +87,7 @@ with TestClient(app) as client, client.websocket_connect("/ws") as ws:
 print("closed while its step was running:", SlowEnv.closed_mid_step)
 ```
 
-With 0.12.0 this prints `observation`, `observation` and `True`: the first
+With 0.12.0 and 0.13.0 this prints `observation`, `observation` and `True`: the first
 session was closed mid-step, a second session was admitted over the cap of
 one, and the first session kept stepping.
 
