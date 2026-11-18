@@ -2,7 +2,7 @@
 
 Cells: done=400
 Spend: 5,477,709 input + 465,346 output tokens, $0.00 reported by provider
-Verdict rule: margin (replicates averaged per seed; "different" needs a 95% interval excluding zero and a delta of at least the margin)
+Verdict rule: margin (replicates averaged per seed; "different" needs a 95% interval excluding zero and, where a margin is set, a delta of at least the margin in either direction)
 
 ## opus
 

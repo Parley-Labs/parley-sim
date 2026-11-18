@@ -711,3 +711,30 @@ def test_cli_report_takes_a_verdict_rule(tmp_path, capsys):
     assert "Verdict rule: margin" in capsys.readouterr().out
     assert cli.main(["report", str(tmp_path)]) == 0
     assert "Verdict rule" not in capsys.readouterr().out  # the default prints as before
+
+
+def test_margin_rule_calls_a_delta_at_the_margin_different(tmp_path, monkeypatch):
+    import dataclasses
+
+    import parley_sim.metrics as metrics_mod
+    asyncio.run(run_matched(cfg(), tmp_path))
+    real_resolve = metrics_mod.resolve_env
+
+    def controlled(lines):  # every seed: aoc exactly 0.25 above soc, no replay wobble
+        return {"focal_surplus_share": 0.75 if lines[0]["spec"]["arm"] == "aoc" else 0.5}
+
+    def resolve(*a, **kw):
+        entry = real_resolve(*a, **kw)
+        kinds = {"focal_surplus_share": entry.metric_kinds["focal_surplus_share"]}
+        return dataclasses.replace(entry, episode_metrics=controlled, metric_kinds=kinds)
+
+    monkeypatch.setattr(metrics_mod, "resolve_env", resolve)
+    margins = {"focal_surplus_share": 0.25}
+
+    def verdict(rule):
+        report = build_report(tmp_path, margins=margins, rule=rule)
+        return next(iter(report["comparisons"].values()))["aoc vs soc"]["focal_surplus_share"]
+
+    # Both intervals are exactly [0.25, 0.25]: on the margin.
+    assert verdict("margin")["verdict"] == "different"
+    assert verdict("noise-floor")["verdict"] == "equivalent"  # the pre-registered rule, unchanged

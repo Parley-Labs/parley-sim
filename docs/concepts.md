@@ -95,6 +95,8 @@ new study before running it.
 
 The rules are checked in that order, so a difference that is inside the
 margin is reported as equivalent even if its interval also excludes zero.
+Under the margin rule, a difference of at least the margin is different even
+when its interval also touches the margin.
 There is no minimum sample size: with only a handful of pairs, intervals are
 unreliable, so look at `n` before the verdict.
 
