@@ -57,9 +57,11 @@ def deal_from_json(obj: Mapping[str, Any]) -> Deal:
     for name, opts in ISSUES:
         if name not in obj:
             raise ValueError(f"deal is missing {name!r}")
-        if obj[name] not in opts:
+        # Exact type: `False == 0` and `10.0 == 10` must not pass as options.
+        match = [i for i, o in enumerate(opts) if type(o) is type(obj[name]) and o == obj[name]]
+        if not match:
             raise ValueError(f"{name}={obj[name]!r} is not one of {list(opts)}")
-        idx.append(opts.index(obj[name]))
+        idx.append(match[0])
     return tuple(idx)
 
 

@@ -1,6 +1,11 @@
 {
   "n": 150,
   "invalid": [],
+  "weighted_to_pool": {
+    "kappa_understated": 0.44794434906786046,
+    "precision_understated": 0.6388888888888891,
+    "recall_understated": 0.3838505787941199
+  },
   "kappa_understated": 0.643987341772152,
   "kappa_all": 0.6553821204135415,
   "confusion_auto_by_human": {

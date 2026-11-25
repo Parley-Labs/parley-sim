@@ -9,8 +9,9 @@
 # cp_max_anchor) and the diversity table (sd_cp_first_offer_share,
 # opening_distinct2), then the outcome metrics as secondary.
 #
-# Customer model IDs are placeholders until checked against OpenRouter's
-# /models list; the runner fixes them before spending.
+# Customer models: the most capable Muse and Nemotron chat models on OpenRouter
+# with structured-output support at the time of the run (checked in a 2-seed
+# canary first). Header edited after the run; the settings are as run.
 run_id: family-sd4
 env: support_desk
 seeds: 1060:1100
@@ -38,7 +39,7 @@ lineup:
   provider_params: *anthropic
 - name: muse-customer
   provider: openai_compat
-  model: MUSE_MODEL_ID
+  model: meta/muse-wonder
   base_url: https://openrouter.ai/api/v1
   max_tokens: 8192
   provider_params: &any_upstream
@@ -49,7 +50,7 @@ lineup:
         include: true
 - name: nemotron-customer
   provider: openai_compat
-  model: NEMOTRON_MODEL_ID
+  model: nvidia/nemotron-3-ultra-550b-a55b
   base_url: https://openrouter.ai/api/v1
   max_tokens: 8192
   provider_params: *any_upstream
