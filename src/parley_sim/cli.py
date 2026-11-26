@@ -186,6 +186,28 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return 1 if bad else 0
 
 
+def cmd_harbor_export(args: argparse.Namespace) -> int:
+    """Experimental: write Harbor tasks, one per seed and counterpart."""
+    try:
+        from parley_sim.adapters.harbor import export_task
+    except ImportError as exc:
+        print(f"harbor-export needs the openenv extra: {exc}", file=sys.stderr)
+        return 2
+    from parley_sim.matched import parse_seeds
+
+    wheel = Path(args.wheel)
+    if not wheel.is_file() or wheel.suffix != ".whl":
+        print(f"--wheel {wheel}: not a wheel file (build one with `uv build --wheel`)", file=sys.stderr)
+        return 2
+    out = Path(args.out)
+    for seed in parse_seeds(args.seeds):
+        for counterpart in args.counterpart:
+            task = export_task(out, seed=seed, counterpart=counterpart, wheel=wheel,
+                               extra_ca=Path(args.extra_ca) if args.extra_ca else None)
+            print(task)
+    return 0
+
+
 _ENV_HELP = ("environment name or import path (e.g. my_pkg.envs:ENTRY). Needed for an "
              "environment that is not built in, registered or installed: import paths "
              "recorded in traces and manifests are never imported on their own")
@@ -229,6 +251,15 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("traces", nargs="+")
     v.add_argument("--env", help=_ENV_HELP)
     v.set_defaults(func=cmd_verify)
+    h = sub.add_parser("harbor-export", help="experimental: write Harbor tasks (one episode each)")
+    h.add_argument("--out", required=True, help="directory to write task directories into")
+    h.add_argument("--seeds", required=True, help="seed range, e.g. 1060:1100")
+    h.add_argument("--counterpart", action="append", required=True,
+                   help="counterpart seat label, e.g. policy:hardliner (repeat for more arms)")
+    h.add_argument("--wheel", required=True, help="parley-sim wheel the runtime sidecar installs")
+    h.add_argument("--extra-ca", help="CA certificate to trust inside the images (local builds "
+                   "behind a TLS-intercepting proxy; don't use for tasks you publish)")
+    h.set_defaults(func=cmd_harbor_export)
     args = p.parse_args(argv)
     return args.func(args)
 
