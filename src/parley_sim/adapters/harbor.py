@@ -1,46 +1,146 @@
-"""Harbor export (spike): parley-sim episodes as Harbor tasks.
+"""Harbor export (experimental): parley-sim episodes as Harbor tasks.
 
-Each Harbor task plays one episode. A `parley-runtime` sidecar holds the
-episode and every counterpart seat; the agent under test plays the focal seat
-through two MCP tools, `start_negotiation` and `take_turn`. The counterpart's
-private values, and the episode itself, live only in the sidecar.
+`parley-sim harbor-export` turns a matched-run config into Harbor tasks: one
+task per cell of the config's grid (seed, arm, replicate), with the same seeds, arms and
+counterpart rotation as a local run. The agent under test takes the focal
+seat's place; it is chosen when the tasks are run (`harbor run -a ... -m ...`),
+so the config's `focal_models` are not used.
 
-The verifier fetches the scored result from the sidecar's `/result` route with
-a per-task token that only the sidecar and the verifier hold, so the agent
-cannot write what gets scored. `/result` replays the trace (`verify`) before
-reporting it.
+Each task's `parley-runtime` sidecar holds the episode and every counterpart
+seat (scripted policy, model, or UserSim persona model). The agent plays the
+focal seat through two MCP tools, `start_negotiation` and `take_turn`. The
+counterpart's private values, its model and its API key live only in the
+sidecar.
 
-Reward (`reward.json`):
-  reward     focal_surplus_share as in local runs (can be negative: a deal
-             below the agent's walk-away); 0 when the episode didn't finish
-             or the share is undefined
-  no_deal    1 when the episode ended without a deal
+The verifier fetches the result from the sidecar's `/result` route with a
+per-task token that only the sidecar and the verifier hold, so the agent cannot
+write what gets scored. The sidecar replays the trace (`verify`) before
+reporting it. Reward (`reward.json`):
+
+  reward     focal_surplus_share, as in local runs (negative for a deal below
+             the agent's walk-away); 0 if the episode didn't finish, didn't
+             verify, or the share is undefined
+  no_deal    1 when the episode finished without a deal
   completed  1 when the episode reached its end
   verified   1 when the trace replays exactly
+
+`collect_jobs` turns finished Harbor trials back into a run directory that
+`parley-sim report` reads, with each Harbor agent and model as a focal model.
+
+Limits: the scenario of a seed is computable from the public generator. A
+published task names its seed (in task files the agent's container doesn't
+see), so an agent with internet access could in principle look it up; export
+with a seed secret for private evaluations.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import hmac
 import json
 import os
+import re
 import secrets
 import shutil
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 from parley_sim import envs
-from parley_sim.adapters.openenv import ParleySimAction, ParleySimEnvironment, ParleySimObservation
-from parley_sim.runtime.episode import verify
+from parley_sim.core.hashing import digest
+from parley_sim.core.protocol import JSON, MalformedOutput, Seat
+from parley_sim.core.rng import secret_seed
+from parley_sim.drivers.models import (
+    Breaker,
+    ModelSeat,
+    ModelSpec,
+    ProviderClient,
+    ScriptedSeat,
+    aclose_clients,
+    build_client,
+)
+from parley_sim.runtime.episode import (
+    DecisionRequest,
+    DecisionResult,
+    Episode,
+    EpisodeComplete,
+    EpisodeSpec,
+    verify,
+)
+from parley_sim.trace import read_trace
 
-CLIENT = "client"
+CLIENT = "client"  # the focal seat's label: played from outside, as in the OpenEnv adapter
 RUNTIME_SERVICE = "parley-runtime"
 RUNTIME_PORT = 8000
-
+PERSONA_PATH = "/data/personas.parquet"  # where the user's persona panel is mounted
 TOOL_START = "start_negotiation"
 TOOL_TURN = "take_turn"
+MAX_ACTION_CHARS = 20_000
+_PARSE_ERRORS = (MalformedOutput, RecursionError, ValueError, TypeError)
+_JSON_REPLY = re.compile(r"\n*Respond with a JSON object matching this schema:\n.*\Z", re.S)
+
+
+# --------------------------------------------------------------------------- cells
+
+
+@dataclass
+class HarborCell:
+    """One task's episode: everything the sidecar needs except secrets."""
+
+    run_id: str
+    env: str
+    seed: int
+    arm: str
+    replicate: int
+    focal_seat: Seat
+    seats: dict[Seat, str]  # counterpart seats only: "policy:<name>" | "model:<name>"
+    env_config: dict[str, Any] = field(default_factory=dict)
+    lineup: list[dict[str, Any]] = field(default_factory=list)  # specs of the model seats
+
+    @property
+    def name(self) -> str:
+        return f"{self.env.replace('_', '-')}__s{self.seed}-{self.arm}-r{self.replicate}"
+
+    def encode(self) -> str:
+        return base64.b64encode(json.dumps(asdict(self), sort_keys=True).encode()).decode()
+
+    @classmethod
+    def decode(cls, text: str) -> HarborCell:
+        return cls(**json.loads(base64.b64decode(text)))
+
+
+def harbor_cells(grid: list[Any], *, run_id: str, env: str, env_config: dict[str, Any],
+                 lineup: list[ModelSpec]) -> list[HarborCell]:
+    """A matched grid without its focal model: one cell per (seed, arm,
+    replicate), counterparts seated as a local run would seat them. `grid` is
+    `parley_sim.matched.build_grid(cfg)`; the cells of its first focal model
+    are used."""
+    specs = {m.name: m for m in lineup}
+    focal = grid[0].focal if grid else None
+    out = []
+    for c in grid:
+        if c.focal != focal:
+            continue
+        seats = {s: label for s, label in c.seats.items() if s != c.focal_seat}
+        members = sorted({label.split(":", 1)[1] for label in seats.values()
+                          if label.startswith("model:")})
+        out.append(HarborCell(run_id=run_id, env=env, seed=c.seed, arm=c.arm,
+                              replicate=c.replicate, focal_seat=c.focal_seat, seats=seats,
+                              env_config=dict(env_config),
+                              lineup=[specs[n].model_dump(exclude_none=True) for n in members]))
+    return out
+
+
+def key_env(spec: ModelSpec) -> str | None:
+    """The environment variable a model seat reads its API key from (as
+    `build_client` picks it)."""
+    if spec.provider == "scripted":
+        return None
+    if spec.api_key_env:
+        return spec.api_key_env
+    return {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}.get(
+        spec.provider, "OPENROUTER_API_KEY")
 
 
 # --------------------------------------------------------------------------- runtime
@@ -50,14 +150,10 @@ TOOL_TURN = "take_turn"
 class RuntimeConfig:
     """What one sidecar plays, read from its environment variables."""
 
-    seed: int
-    counterpart: str  # "policy:<name>" or "model:<lineup name>"
+    cell: HarborCell
     token: str
-    env: str = "support_desk"
-    counterpart_seat: str = "customer"
-    arm: str | None = None
-    lineup: list[dict[str, Any]] | None = None
     seed_secret: str | None = None
+    persona_file: str | None = None
 
     @classmethod
     def from_env(cls, environ: dict[str, str] | None = None) -> RuntimeConfig:
@@ -65,79 +161,170 @@ class RuntimeConfig:
         token = e.get("PARLEY_RESULT_TOKEN", "")
         if len(token) < 16:
             raise ValueError("PARLEY_RESULT_TOKEN must be set (16+ characters)")
-        lineup = json.loads(e["PARLEY_LINEUP"]) if e.get("PARLEY_LINEUP") else None
-        return cls(seed=int(e["PARLEY_SEED"]), counterpart=e["PARLEY_COUNTERPART"], token=token,
-                   env=e.get("PARLEY_ENV", "support_desk"),
-                   counterpart_seat=e.get("PARLEY_COUNTERPART_SEAT", "customer"),
-                   arm=e.get("PARLEY_ARM") or None, lineup=lineup,
-                   seed_secret=e.get("PARLEY_SEED_SECRET") or None)
+        return cls(cell=HarborCell.decode(e["PARLEY_CELL"]), token=token,
+                   seed_secret=e.get("PARLEY_SEED_SECRET") or None,
+                   persona_file=e.get("PARLEY_PERSONA_FILE") or None)
 
 
 class HarborRuntime:
     """One episode, played by the agent through MCP. Calls are serialised:
     the episode has one pending focal decision at a time."""
 
-    def __init__(self, config: RuntimeConfig, environment: ParleySimEnvironment | None = None):
+    def __init__(self, config: RuntimeConfig, client_factory=build_client):
         self.config = config
-        self.entry = envs.get(config.env)
-        self.environment = environment or ParleySimEnvironment(
-            env=config.env, seats={self.entry.focal_seat: CLIENT,
-                                   config.counterpart_seat: config.counterpart},
-            lineup=config.lineup, seed_secret=config.seed_secret, release_trace="after_done")
+        cell = config.cell
+        self.entry = envs.get(cell.env)
+        self.text = self.entry.text()
+        self.lineup = {m["name"]: ModelSpec(**m) for m in cell.lineup}
+        self.personas: list[dict[str, Any]] | None = None
+        if any(m.persona for m in self.lineup.values()):
+            if not config.persona_file:
+                raise ValueError("a persona counterpart needs PARLEY_PERSONA_FILE")
+            from parley_sim.drivers.usersim_persona import load_personas
+            self.personas = load_personas(config.persona_file)
+        self.clients: dict[str, ProviderClient] = {}
+        for spec in self.lineup.values():  # fail at startup, not at the agent's first call
+            if spec.provider != "scripted":
+                self.clients[spec.name] = client_factory(spec)
+        self.breaker = Breaker(3)
+        self.episode: Episode | None = None
+        self.counterparts: dict[Seat, ModelSeat | ScriptedSeat] = {}
+        self.pending: DecisionRequest | None = None
+        self.last_strike: str | None = None
+        self.error: str | None = None
         self._lock = asyncio.Lock()
-        self._obs: ParleySimObservation | None = None
 
-    def _describe(self, obs: ParleySimObservation) -> str:
-        if obs.done:
-            score = obs.outcomes.get(self.entry.focal_seat)
+    def _seat_text(self, spec: ModelSpec):
+        if spec.persona == "usersim":
+            from parley_sim.drivers.usersim_persona import UserSimPersonaText, persona_for_seed
+            persona = persona_for_seed(self.personas, self.config.cell.seed)
+            return UserSimPersonaText(self.entry.text(), persona)
+        return self.entry.text()
+
+    def _build(self) -> Episode:
+        cell = self.config.cell
+        seed = secret_seed(self.config.seed_secret, cell.seed) if self.config.seed_secret else cell.seed
+        seats = {cell.focal_seat: CLIENT, **cell.seats}
+        spec = EpisodeSpec(seed=seed, seats=seats, config=cell.env_config, focal_seat=cell.focal_seat,
+                           arm=cell.arm, pair_key=f"{cell.run_id}-{cell.seed}",
+                           cell_key=f"{cell.run_id}-{cell.seed}-{cell.arm}-r{cell.replicate}",
+                           replicate=cell.replicate)
+        policies = {s: self.entry.make_policy(label.split(":", 1)[1], s)
+                    for s, label in cell.seats.items() if label.startswith("policy:")}
+        for s, label in cell.seats.items():
+            if label.startswith("model:"):
+                m = self.lineup[label.split(":", 1)[1]]
+                self.counterparts[s] = (
+                    ScriptedSeat(m, self._seat_text(m), self.entry.make_policy(m.model, s))
+                    if m.provider == "scripted"
+                    else ModelSeat(m, self._seat_text(m), self.clients[m.name], self.breaker))
+        return Episode(self.entry.env(), spec, policies)
+
+    async def _advance(self, event: DecisionRequest | EpisodeComplete) -> None:
+        """Play counterpart turns until the focal seat must act or the episode ends."""
+        episode = self.episode
+        assert episode is not None
+        try:
+            while isinstance(event, DecisionRequest) and event.seat != self.config.cell.focal_seat:
+                event = episode.advance(await self.counterparts[event.seat].decide(event))
+        except Exception as exc:
+            if episode.result is None:
+                episode.abort(repr(exc))
+            self.error = repr(exc)[:500]
+            event = episode.result
+        self.pending = event if isinstance(event, DecisionRequest) else None
+
+    def _prompt(self) -> str:
+        episode = self.episode
+        if episode is None:
+            return f"Call {TOOL_START} first."
+        if self.pending is None:
+            if self.error is not None:
+                return ("The negotiation ended early: your counterpart could not continue. "
+                        "Do not call any more tools.")
+            score = (episode.result.outcomes or {}).get(self.config.cell.focal_seat) \
+                if episode.result else None
             return ("The negotiation is over."
                     + (f" Your score (value of the outcome to you): {score:g}." if score is not None else "")
                     + " Do not call any more tools.")
-        note = (f"Your previous turn could not be used ({obs.last_strike}); "
-                "a no-move turn was recorded instead.\n\n" if obs.last_strike else "")
-        return f"{note}{obs.user_prompt}"
+        _, user = self.text.render(self.pending.observation)
+        user = _JSON_REPLY.sub(f"\n\nTake your turn with `{TOOL_TURN}`.", user)
+        note = (f"Your previous turn could not be used ({self.last_strike}); "
+                "no move was made for it.\n\n" if self.last_strike else "")
+        return note + user
 
     async def start(self) -> str:
         async with self._lock:
-            if self._obs is None:
-                self._obs = await self.environment.reset_async(seed=self.config.seed,
-                                                               arm=self.config.arm)
-                return f"{self._obs.system_prompt}\n\n{self._describe(self._obs)}"
-            return ("The negotiation has already started. Current state:\n\n"
-                    + self._describe(self._obs))
+            if self.episode is not None:
+                return "The negotiation has already started. Current state:\n\n" + self._prompt()
+            self.episode = self._build()
+            await self._advance(self.episode.advance())
+            if self.pending is None:
+                return self._prompt()
+            system, _ = self.text.render(self.pending.observation)
+            return f"{system}\n\n{self._prompt()}"
+
+    def _focal_result(self, req: DecisionRequest, submitted: JSON) -> DecisionResult:
+        raw: JSON = {"source": "harbor", "payload": submitted}
+        try:
+            if len(json.dumps(submitted)) > MAX_ACTION_CHARS:
+                raise MalformedOutput(f"turn is longer than {MAX_ACTION_CHARS} characters")
+            parsed, explanation = self.text.parse(submitted)
+        except _PARSE_ERRORS as exc:
+            detail = str(exc) if isinstance(exc, MalformedOutput) else f"{type(exc).__name__}: {exc}"
+            return DecisionResult(req.request_id, None, strike="malformed_output",
+                                  detail=detail[:500], raw=raw)
+        return DecisionResult(req.request_id, parsed, explanation=explanation, raw=raw)
 
     async def take_turn(self, message: str, move: dict[str, Any], explanation: str = "") -> str:
         async with self._lock:
-            if self._obs is None:
-                return f"Call {TOOL_START} first."
-            if self._obs.done:
-                return self._describe(self._obs)
-            text = json.dumps({"message": message, "move": move, "explanation": explanation})
-            try:
-                action = ParleySimAction(text=text)
-            except ValueError as exc:  # too long: same strike path as a malformed reply
-                action = ParleySimAction(text=json.dumps({"error": str(exc)[:200]}))
-            self._obs = await self.environment.step_async(action)
-            return self._describe(self._obs)
+            episode, req = self.episode, self.pending
+            if episode is None or req is None:
+                return self._prompt()
+            result = self._focal_result(req, {"message": message, "move": move,
+                                              "explanation": explanation})
+            event = episode.advance(result)
+            decision = next(l for l in reversed(episode.lines) if l["type"] == "decision"
+                            and l["seat"] == self.config.cell.focal_seat)
+            self.last_strike = decision["strike"]
+            await self._advance(event)
+            return self._prompt()
 
     def result(self) -> dict[str, Any]:
-        """The scored outcome, for the verifier only."""
-        state = self.environment.state
-        lines = state.trace
-        completed = bool(state.done and lines and lines[-1].get("type") == "footer"
-                         and lines[-1].get("status") == "complete")
-        out: dict[str, Any] = {"completed": int(completed), "reward": 0.0, "no_deal": 0,
-                               "verified": 0, "problems": [], "metrics": {}, "trace": lines}
-        if not completed:
+        """The scored outcome, for the verifier only. Mid-episode the trace is
+        the focal seat's own view: no counterpart decisions or private values."""
+        cell = self.config.cell
+        out: dict[str, Any] = {
+            "cell": {"run_id": cell.run_id, "seed": cell.seed, "arm": cell.arm,
+                     "replicate": cell.replicate, "seats": cell.seats},
+            "persona_digest": digest(self.personas) if self.personas is not None else None,
+            "completed": 0, "errored": 0, "reward": 0.0, "no_deal": 0, "verified": 0,
+            "problems": [], "metrics": {}, "trace": []}
+        episode = self.episode
+        if episode is None:
+            out["problems"] = ["the negotiation was never started"]
+            return out
+        lines = episode.lines
+        if episode.result is None:
             out["problems"] = ["the episode did not finish"]
+            out["trace"] = [l if l["type"] == "event" else {k: v for k, v in l.items() if k != "context"}
+                            for l in lines if l["type"] == "event"
+                            or (l["type"] == "decision" and l["seat"] == cell.focal_seat)]
+            return out
+        out["trace"] = list(lines)
+        if episode.result.status != "complete":
+            out.update(errored=1, problems=[f"episode errored: {self.error or episode.result.error}"])
             return out
         problems = verify(self.entry.env(), lines, make_policy=self.entry.make_policy)
         metrics = self.entry.episode_metrics(lines)
         share = metrics.get("focal_surplus_share")
-        out.update(verified=int(not problems), problems=problems, metrics=metrics,
+        out.update(completed=1, verified=int(not problems), problems=problems, metrics=metrics,
                    reward=float(share) if share is not None and not problems else 0.0,
                    no_deal=int(metrics.get("deal") == 0.0))
         return out
+
+    async def aclose(self) -> None:
+        await aclose_clients(list(self.clients.values()))
 
 
 def create_runtime_app(runtime: HarborRuntime) -> Any:
@@ -147,8 +334,7 @@ def create_runtime_app(runtime: HarborRuntime) -> Any:
     from starlette.requests import Request
     from starlette.responses import JSONResponse, PlainTextResponse
 
-    schema = runtime.environment.text.action_schema
-    move_schema = schema["properties"]["move"]
+    move_schema = runtime.text.action_schema["properties"]["move"]
     mcp = FastMCP("parley-runtime", stateless_http=True, json_response=True,
                   transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
 
@@ -159,8 +345,9 @@ def create_runtime_app(runtime: HarborRuntime) -> Any:
         return await runtime.start()
 
     @mcp.tool(name=TOOL_TURN, description=(
-        "Take your turn: a message to your counterpart and one move. `move` is "
-        + json.dumps(move_schema) + ". Returns your counterpart's reply, or the end of the negotiation."))
+        "Take your turn: a message to your counterpart, one move, and a one-sentence explanation "
+        "of the move. `move` is " + json.dumps(move_schema)
+        + ". Returns your counterpart's reply, or the end of the negotiation."))
     async def take_turn(message: str, move: dict[str, Any], explanation: str = "") -> str:
         return await runtime.take_turn(message, move, explanation)
 
@@ -203,15 +390,17 @@ TASK_TOML = """\
 schema_version = "1.1"
 
 [task]
-name = "{name}"
+name = "{task_name}"
 authors = [{{ name = "Parley Labs" }}]
 keywords = ["parley-sim", "negotiation", "{env}", "{arm}"]
 
 [metadata]
 category = "negotiation"
+run_id = "{run_id}"
 seed = {seed}
-counterpart = "{counterpart}"
 arm = "{arm}"
+replicate = {replicate}
+config_hash = "{config_hash}"
 
 [verifier]
 timeout_sec = 120.0
@@ -221,7 +410,7 @@ env = {{ PARLEY_RESULT_TOKEN = "{token}" }}
 timeout_sec = {agent_timeout}
 
 [environment]
-build_timeout_sec = 900.0
+build_timeout_sec = 1200.0
 cpus = 1
 memory_mb = 2048
 
@@ -240,19 +429,16 @@ services:
   {service}:
 {source}
     environment:
-      - PARLEY_ENV={env}
-      - PARLEY_SEED={seed}
-      - PARLEY_COUNTERPART={counterpart}
-      - PARLEY_ARM={arm}
-      - PARLEY_RESULT_TOKEN={token}
-{extra_env}    expose:
+      PARLEY_CELL: "{cell}"
+      PARLEY_RESULT_TOKEN: "{token}"
+{extra_env}{volumes}    expose:
       - "{port}"
     healthcheck:
       test: ["CMD", "python3", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:{port}/health', timeout=2)"]
       interval: 2s
       timeout: 5s
-      retries: 30
+      retries: 60
       start_period: 5s
 """
 
@@ -264,8 +450,7 @@ FROM python:3.12-slim
 RUNTIME_DOCKERFILE = """\
 FROM python:3.12-slim
 {ca}COPY dist/ /tmp/dist/
-RUN pip install --no-cache-dir "$(ls /tmp/dist/*.whl)[openenv,openai]" "mcp>=1.30,<2" "uvicorn>=0.30" \\
-    && rm -rf /tmp/dist
+RUN pip install --no-cache-dir "$(ls /tmp/dist/*.whl)[{extras}]" && rm -rf /tmp/dist
 EXPOSE {port}
 CMD ["python3", "-c", "from parley_sim.adapters.harbor import serve; serve()"]
 """
@@ -298,8 +483,8 @@ if result["problems"]:
 """
 
 # Plumbing check, not a strong player: hold one package, then accept the
-# counterpart's standing proposal on the last turn (a deal is still refused if
-# it's outside the agent's limits, which the trace records as a strike).
+# counterpart's standing proposal on the last turn (an acceptance outside the
+# agent's limits is recorded as a strike).
 SOLVE_SH = f"""\
 #!/bin/bash
 set -euo pipefail
@@ -312,7 +497,7 @@ HEAD = {{"content-type": "application/json", "accept": "application/json, text/e
 def call(method, params, i=[0]):
     i[0] += 1
     body = json.dumps({{"jsonrpc": "2.0", "id": i[0], "method": method, "params": params}}).encode()
-    with urllib.request.urlopen(urllib.request.Request(URL, body, HEAD), timeout=600) as r:
+    with urllib.request.urlopen(urllib.request.Request(URL, body, HEAD), timeout=900) as r:
         return json.load(r)
 
 def tool(name, **args):
@@ -323,8 +508,8 @@ call("initialize", {{"protocolVersion": "2025-06-18", "capabilities": {{}},
                     "clientInfo": {{"name": "oracle", "version": "0"}}}})
 text = tool("{TOOL_START}")
 print(text)
-for _ in range(20):
-    if "negotiation is over" in text:
+for _ in range(50):
+    if "Do not call any more tools" in text:
         break
     last = "Turns you have left, including this one: 1" in text
     move = ({{"type": "accept"}} if last else
@@ -336,49 +521,148 @@ for _ in range(20):
 PY
 """
 
+_CA_LINES = ("COPY extra-ca.crt /usr/local/share/ca-certificates/extra-ca.crt\n"
+             "RUN cat /usr/local/share/ca-certificates/extra-ca.crt >> /etc/ssl/certs/ca-certificates.crt\n"
+             "ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt "
+             "REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt "
+             "NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/extra-ca.crt\n")
 
-def _arm(counterpart: str) -> str:
-    kind, _, name = counterpart.partition(":")
-    return f"scripted-{name}" if kind == "policy" else name
 
-
-def export_task(out: Path, *, seed: int, counterpart: str, wheel: Path, env: str = "support_desk",
-                dataset: str = "parley-labs/parley-sim", agent_timeout: float = 1800.0,
-                lineup: list[dict[str, Any]] | None = None, extra_ca: Path | None = None) -> Path:
-    """Write one Harbor task directory and return it. `extra_ca` adds a CA
-    certificate to both images (for building behind a TLS-intercepting proxy);
+def export_task(out: Path, cell: HarborCell, *, chash: str, wheel: Path | None = None,
+                image: str | None = None, dataset: str = "parley-labs/parley-sim",
+                agent_timeout: float = 1800.0, seed_secret: str | None = None,
+                extra_ca: Path | None = None) -> Path:
+    """Write one Harbor task directory and return it. The sidecar is either
+    built from `wheel` or pulled as a prebuilt `image`. `extra_ca` adds a CA
+    certificate to the images (for building behind a TLS-intercepting proxy);
     leave it unset for tasks you publish."""
-    arm = _arm(counterpart)
-    name = f"{env.replace('_', '-')}__s{seed}-{arm}"
-    task = out / name
+    if (wheel is None) == (image is None):
+        raise ValueError("give exactly one of wheel or image")
+    task = out / cell.name
     if task.exists():
         shutil.rmtree(task)
-    (task / "environment" / "runtime" / "dist").mkdir(parents=True)
+    (task / "environment").mkdir(parents=True)
     (task / "tests").mkdir()
     (task / "solution").mkdir()
     token = secrets.token_urlsafe(24)
+    specs = [ModelSpec(**m) for m in cell.lineup]
+    persona = any(m.persona for m in specs)
+    extras = ["harbor", *sorted({"anthropic" if m.provider == "anthropic" else "openai"
+                                 for m in specs if m.provider != "scripted"})]
+    if persona:
+        extras.append("usersim")
     ca = ""
     if extra_ca is not None:
-        for d in (task / "environment", task / "environment" / "runtime"):
-            shutil.copy(extra_ca, d / "extra-ca.crt")
-        ca = ("COPY extra-ca.crt /usr/local/share/ca-certificates/extra-ca.crt\n"
-              "RUN cat /usr/local/share/ca-certificates/extra-ca.crt >> /etc/ssl/certs/ca-certificates.crt\n"
-              "ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt "
-              "REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt "
-              "NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/extra-ca.crt\n")
-    shutil.copy(wheel, task / "environment" / "runtime" / "dist" / wheel.name)
-    extra_env = (f"      - PARLEY_LINEUP={json.dumps(lineup)}\n" if lineup else "")
-    fmt = dict(name=f"{dataset}__{name}", env=env, seed=seed, counterpart=counterpart, arm=arm,
-               token=token, agent_timeout=agent_timeout, service=RUNTIME_SERVICE, port=RUNTIME_PORT,
-               source="    build:\n      context: ./runtime", extra_env=extra_env, ca=ca)
+        ca = _CA_LINES
+        shutil.copy(extra_ca, task / "environment" / "extra-ca.crt")
+    if wheel is not None:
+        runtime = task / "environment" / "runtime"
+        (runtime / "dist").mkdir(parents=True)
+        shutil.copy(wheel, runtime / "dist" / wheel.name)
+        (runtime / "Dockerfile").write_text(RUNTIME_DOCKERFILE.format(ca=ca, extras=",".join(extras),
+                                                                     port=RUNTIME_PORT))
+        if extra_ca is not None:
+            shutil.copy(extra_ca, runtime / "extra-ca.crt")
+        source = "    build:\n      context: ./runtime"
+    else:
+        source = f"    image: {image}"
+    keys = sorted({k for m in specs if (k := key_env(m))})
+    extra_env = "".join(f'      {k}: "${{{k}:-}}"\n' for k in keys)
+    if seed_secret:
+        extra_env += f'      PARLEY_SEED_SECRET: "{seed_secret}"\n'
+    volumes = ""
+    if persona:
+        extra_env += f'      PARLEY_PERSONA_FILE: "{PERSONA_PATH}"\n'
+        volumes = ("    volumes:\n      - ${PARLEY_PERSONA_PANEL:?set PARLEY_PERSONA_PANEL to your "
+                   f"UserSim persona panel}}:{PERSONA_PATH}:ro\n")
+    fmt = dict(task_name=f"{dataset}__{cell.name}", env=cell.env, run_id=cell.run_id, seed=cell.seed,
+               arm=cell.arm, replicate=cell.replicate, config_hash=chash, token=token,
+               agent_timeout=agent_timeout, service=RUNTIME_SERVICE, port=RUNTIME_PORT,
+               source=source, cell=cell.encode(), extra_env=extra_env, volumes=volumes, ca=ca)
     (task / "instruction.md").write_text(INSTRUCTION)
     (task / "task.toml").write_text(TASK_TOML.format(**fmt))
     (task / "environment" / "docker-compose.yaml").write_text(COMPOSE.format(**fmt))
     (task / "environment" / "Dockerfile").write_text(MAIN_DOCKERFILE.format(**fmt))
-    (task / "environment" / "runtime" / "Dockerfile").write_text(RUNTIME_DOCKERFILE.format(**fmt))
     (task / "tests" / "test.sh").write_text(TEST_SH)
     (task / "tests" / "fetch_result.py").write_text(FETCH_RESULT)
     (task / "solution" / "solve.sh").write_text(SOLVE_SH)
     for sh in (task / "tests" / "test.sh", task / "solution" / "solve.sh"):
         sh.chmod(0o755)
     return task
+
+
+# --------------------------------------------------------------------------- collect
+
+
+def _focal_name(agent: dict[str, Any]) -> str:
+    name = agent.get("name") or agent.get("import_path") or "agent"
+    model = agent.get("model_name")
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", f"{name}.{model}" if model else name)
+
+
+def _usage(lines: list[dict[str, Any]]) -> dict[str, float]:
+    total = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+    for line in lines:
+        usage = ((line.get("raw") or {}).get("usage") or {}) if line.get("type") == "decision" else {}
+        for k in total:
+            total[k] += usage.get(k, 0)
+    return total
+
+
+def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: Path) -> dict[str, int]:
+    """Gather finished Harbor trials of tasks exported from a matched config
+    (`config`: its model_dump, `chash`: its config_hash) into a run directory
+    for `parley-sim report`. Each Harbor agent and model becomes a focal model.
+    Only one trial per (task, agent) is kept: the earliest. Counterpart usage
+    is counted; the agent's own usage is in Harbor's results."""
+    run_id = config["run_id"]
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "traces").mkdir(exist_ok=True)
+    trials = sorted({p.parent.parent for d in job_dirs for p in Path(d).rglob("verifier/result.json")},
+                    key=lambda t: (json.loads((t / "result.json").read_text()).get("started_at") or "")
+                    if (t / "result.json").exists() else "")
+    rows: dict[tuple[int, str, str, int], dict[str, Any]] = {}
+    focals: dict[str, dict[str, Any]] = {}
+    counts = {"trials": 0, "kept": 0, "duplicates": 0, "other_config": 0}
+    persona_digest = None
+    for trial in trials:
+        counts["trials"] += 1
+        result = json.loads((trial / "verifier" / "result.json").read_text())
+        trial_config = json.loads((trial / "config.json").read_text())
+        cell = result.get("cell") or {}
+        if cell.get("run_id") != run_id:
+            counts["other_config"] += 1
+            continue
+        focal = _focal_name(trial_config.get("agent") or {})
+        key = (cell["seed"], focal, cell["arm"], cell["replicate"])
+        if key in rows:
+            counts["duplicates"] += 1
+            continue
+        focals[focal] = {"name": focal, "provider": "harbor", "model": focal}
+        persona_digest = result.get("persona_digest") or persona_digest
+        cell_key = f"{run_id}-{cell['seed']}-{focal}-{cell['arm']}-r{cell['replicate']}"
+        trace_rel = f"traces/{cell_key}.jsonl"
+        done = bool(result.get("completed") and result.get("verified"))
+        lines = read_trace(trial / "verifier" / "trace.jsonl") if done else []
+        if done:
+            shutil.copy(trial / "verifier" / "trace.jsonl", out / trace_rel)
+        rows[key] = {"type": "cell", "cell_key": cell_key,
+                     "pair_key": f"{run_id}-{cell['seed']}-{focal}", "arm": cell["arm"],
+                     "seed": cell["seed"], "focal": focal, "focal_seat": None,
+                     "replicate": cell["replicate"], "seats": cell.get("seats") or {},
+                     "status": "done" if done else "errored", "trace": trace_rel if done else None,
+                     "usage": _usage(lines), "harbor_trial": str(trial)}
+        if not done:
+            rows[key]["error"] = "; ".join(result.get("problems") or []) or "not completed"
+        counts["kept"] += 1
+    config = json.loads(json.dumps(config))
+    config["lineup"] = [*config["lineup"], *focals.values()]
+    config["focal_models"] = sorted(focals)
+    run = {"type": "run", "run_id": f"{run_id}-harbor", "config_hash": chash, "config": config,
+           "source": "harbor"}
+    if persona_digest:
+        run["persona_digest"] = persona_digest
+    with (out / "manifest.jsonl").open("w", encoding="utf-8") as f:
+        for row in [run, *rows.values()]:
+            f.write(json.dumps(row, sort_keys=True) + "\n")
+    return counts

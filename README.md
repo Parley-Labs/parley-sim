@@ -27,6 +27,8 @@ whether the difference is real, noise, or too close to call.
 - **Runs where you train.** Adapters for [OpenEnv](docs/adapters.md#openenv),
   including a Docker package, and [NeMo Gym](docs/adapters.md#nemo-gym)
   (experimental: not yet run against a live Gym deployment or a training run).
+  Export to [Harbor](docs/harbor.md) tasks so any Harbor agent can play
+  (experimental).
 
 Status: pre-release (0.0.1). The API may change before 0.1.
 
@@ -83,6 +85,7 @@ them all in one command:
 | `usersim` | UserSim persona counterparts |
 | `openenv` | The OpenEnv adapter |
 | `gym` | The NeMo Gym adapter, experimental (Python 3.13.14 or newer; cannot be combined with `anthropic`) |
+| `harbor` | The Harbor export's runtime sidecar, experimental |
 
 `pip install -e ".[openai,anthropic]"` works too. Python 3.11 or newer.
 
@@ -156,6 +159,7 @@ For each agent you get:
 | [Configuration](docs/configuration.md) | Every config field, providers, budgets, safety, resuming |
 | [Your own environment](docs/custom-environments.md) | The environment protocol and how to plug one in |
 | [Adapters](docs/adapters.md) | Running episodes inside NeMo Gym and OpenEnv |
+| [Harbor export](docs/harbor.md) | Episodes as Harbor tasks, and results back into a report (experimental) |
 | [Persona counterparts](docs/personas.md) | Using NeMo UserSim personas as a counterpart arm |
 | [Claim metrics](docs/claims.md) | The experimental honesty metric and how to validate it |
 
@@ -177,6 +181,8 @@ show the method, and to be replaced by yours.
 | `parley-sim matched CONFIG --out DIR` | Run (or resume) a matched grid; exits 1 if any cell errored, 2 if the run halted |
 | `parley-sim report DIR... [--margins k=v,...] [--verdict-rule noise-floor\|margin] [--json] [--env NAME]` | Paired report across one or more run directories |
 | `parley-sim verify TRACE... [--env NAME]` | Replay traces through the environment and check every logged field |
+| `parley-sim harbor-export CONFIG --out DIR --wheel W \| --image I` | Experimental: write [Harbor](docs/harbor.md) tasks, one per cell |
+| `parley-sim harbor-collect JOBS... --config CONFIG --out DIR` | Experimental: gather Harbor trials into a run directory for `report` |
 | `parley-sim claims DIR --prefix P [--env NAME]` | Export a blind sample of agent claims for labelling |
 
 `--env` is needed only for an environment loaded by import path
