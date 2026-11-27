@@ -974,6 +974,26 @@ def bridge_replies(path: Path) -> list[str] | None:
     return replies
 
 
+def _recover_run(out: Path) -> None:
+    """Finish or undo a `_write_run` that was killed part-way, so the manifest
+    and `traces/` match again. The new manifest is written to
+    `manifest.jsonl.collecting` before any directory moves, and replacing the
+    manifest is the commit point: while that file still exists, the previous
+    run is the real one."""
+    traces, old = out / "traces", out / "traces.previous"
+    pending = out / "manifest.jsonl.collecting"
+    if not old.exists():
+        return
+    if pending.exists():  # not committed: put the previous traces back
+        if traces.exists():
+            shutil.rmtree(traces)
+        old.rename(traces)
+    elif traces.exists():  # committed: only the cleanup was missed
+        shutil.rmtree(old)
+    else:
+        old.rename(traces)
+
+
 def _write_run(out: Path, rows: list[dict[str, Any]], copies: list[tuple[Path, str]]) -> None:
     """Write a run directory so a failure leaves the previous one intact: the
     traces go to a staging directory that replaces `traces/` only when all are
@@ -981,6 +1001,7 @@ def _write_run(out: Path, rows: list[dict[str, Any]], copies: list[tuple[Path, s
     touched."""
     out.mkdir(parents=True, exist_ok=True)
     staging, old = out / "traces.collecting", out / "traces.previous"
+    _recover_run(out)
     for d in (staging, old):
         if d.exists():
             shutil.rmtree(d)

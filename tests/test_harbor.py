@@ -799,3 +799,36 @@ def test_inline_refs_keeps_properties_named_like_definition_tables():
 def test_cli_rejects_zero_harbor_user_replicates(tmp_path: Path, capsys):
     assert main(["harbor-export", str(ROOT / "configs" / "meeting-canary.yaml"), "--out", str(tmp_path),
                  "--image", "x", "--harbor-user-arm", "hu", "--harbor-user-replicates", "0"]) == 2
+
+
+def test_collect_recovers_from_an_interrupted_publish(tmp_path: Path):
+    """A collect killed after moving traces/ aside but before replacing the
+    manifest: the next collect restores the previous run instead of deleting it."""
+    from parley_sim.adapters.harbor import _recover_run
+
+    cfg = config()
+    _, result, _ = play(cells(cfg)[0], [accept_last] * 10)
+    _fake_trial(tmp_path / "job", "t0", {"name": "claude-code", "model_name": "anthropic/x"}, result,
+                "2026-11-27T00:00:00")
+    out = tmp_path / "run"
+    collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], out)
+    manifest = (out / "manifest.jsonl").read_text()
+    traces = sorted(p.name for p in (out / "traces").iterdir())
+    # Killed mid-swap: traces moved aside, new ones in place, manifest not yet replaced.
+    (out / "traces").rename(out / "traces.previous")
+    (out / "traces").mkdir()
+    (out / "traces" / "new.jsonl").write_text("{}\n")
+    (out / "manifest.jsonl.collecting").write_text("{}\n")
+    _recover_run(out)
+    assert sorted(p.name for p in (out / "traces").iterdir()) == traces
+    assert (out / "manifest.jsonl").read_text() == manifest and not (out / "traces.previous").exists()
+    # Killed after the commit point: only the old traces are left to remove.
+    (out / "manifest.jsonl.collecting").unlink()
+    (out / "traces.previous").mkdir()
+    _recover_run(out)
+    assert not (out / "traces.previous").exists() and sorted(p.name for p in (out / "traces").iterdir()) == traces
+    # Killed between the two moves: no traces/ at all.
+    (out / "traces").rename(out / "traces.previous")
+    (out / "manifest.jsonl.collecting").write_text("{}\n")
+    _recover_run(out)
+    assert sorted(p.name for p in (out / "traces").iterdir()) == traces
