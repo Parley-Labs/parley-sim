@@ -12,6 +12,7 @@ httpx = pytest.importorskip("httpx")
 
 from parley_sim import envs  # noqa: E402
 from parley_sim.adapters.harbor import (  # noqa: E402
+    CHAT_NOTE,
     HarborCell,
     HarborRuntime,
     RuntimeConfig,
@@ -583,8 +584,9 @@ def test_counterpart_played_from_outside_through_tools():
                 assert err and "not for you" in text
                 _, agent_view = await tool("start_episode")
                 assert "assistant" in agent_view and "other side's turn" in agent_view
+                assert agent_view.count(CHAT_NOTE) == 1  # its chat replies reach the counterparty
                 _, cp_view = await tool("counterpart_start", token=cp_token)
-                assert "counterpart_take_turn" in cp_view
+                assert "counterpart_take_turn" in cp_view and CHAT_NOTE not in cp_view
                 inst = rt.episode.state.inst
                 mutual = sorted(set(inst.free[mt.ASSISTANT]) & set(inst.free[mt.CONTACT]))
                 _, out = await tool("counterpart_take_turn", token=cp_token, action={
@@ -615,6 +617,7 @@ def test_export_of_an_external_arm(tmp_path: Path):
     cp_token = instruction.split('token "')[1].split('"')[0]
     assert f'PARLEY_COUNTERPART_TOKEN: "{cp_token}"' in compose
     assert "counterpart_start" in instruction and "`contact` seat" in instruction
+    assert "Only say you have replied if you have taken a" in instruction
     # The result token stays out of the instruction (the counterparty must not read the score).
     toml = (task / "task.toml").read_text()
     result_token = toml.split('PARLEY_RESULT_TOKEN = "')[1].split('"')[0]

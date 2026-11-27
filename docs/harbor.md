@@ -115,10 +115,19 @@ user_agent:
     - {name: parley-runtime, transport: streamable-http, url: http://parley-runtime:8000/mcp}
 ```
 
-Caveats: not yet run with real agents. Harbor's bridge supports only some
-agents under test (Claude Code, Codex, Gemini CLI, OpenCode, Copilot CLI). The
-two agents share one container, so the counterparty token is a guard against
-mistakes, not a security boundary.
+The agent under test is told that the chat prompting it is the other side, so
+it keeps its private information out of its chat replies.
+
+Caveats:
+- **Small runs only so far.** The first run had 6 trials with Claude Code on
+  both sides; turn-taking over the bridge worked in all of them.
+- **Supported agents.** Harbor's bridge supports only some agents under test
+  (Claude Code, Codex, Gemini CLI, OpenCode, Copilot CLI).
+- **Usage figures.** In these trials, Harbor's per-trial usage (`agent_result`)
+  is the simulated user's, not the agent under test's; read the agent's usage
+  from its own logs.
+- **Token.** The two agents share one container, so the counterparty token is
+  a guard against mistakes, not a security boundary.
 
 ## Report
 

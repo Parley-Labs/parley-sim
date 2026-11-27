@@ -195,6 +195,12 @@ class RuntimeConfig:
 
 
 EXTERNAL = "external:"  # seat label prefix: played from outside, through the counterpart tools
+# Told to the agent under test when the other side is played from outside: in a Harbor
+# simulated-user trial the chat that prompts the agent is the counterparty itself.
+CHAT_NOTE = ("Note: the chat that prompts you here is the other side of this episode, not "
+             "someone on your side. Anything you write back in that chat reaches them, so keep "
+             "your private information out of it; a short reply such as \"Done, your turn.\" "
+             "is enough.")
 TOOL_CP_START = "counterpart_start"
 TOOL_CP_TURN = "counterpart_take_turn"
 
@@ -298,8 +304,9 @@ class HarborRuntime:
                     + (f" Your score (value of the outcome to you): {score:g}." if score is not None else "")
                     + " Do not call any more tools.")
         if self.pending.seat != seat:
-            return (f"It is the other side's turn. Wait until they have replied, then call "
+            wait = (f"It is the other side's turn. Wait until they have replied, then call "
                     f"`{start}` to see what they did.")
+            return wait + (f"\n\n{CHAT_NOTE}" if self._chat_is_counterparty(seat) else "")
         _, user = self.text.render(self.pending.observation)
         user = _JSON_REPLY.sub("", user) + f"\n\nTake your turn with `{turn}`."
         strike = self.last_strike.get(seat)
@@ -319,7 +326,14 @@ class HarborRuntime:
             if episode.result is not None:
                 return self._prompt(seat)
             system, _ = self.text.render(episode.env.observe(episode.state, seat))
-            return f"{system}\n\n{self._prompt(seat)}"
+            text = f"{system}\n\n{self._prompt(seat)}"
+            if self._chat_is_counterparty(seat) and CHAT_NOTE not in text:
+                text += f"\n\n{CHAT_NOTE}"
+            return text
+
+    def _chat_is_counterparty(self, seat: Seat) -> bool:
+        """True for the agent under test when another seat is played from outside."""
+        return seat not in self.external and bool(self.external)
 
     def _focal_result(self, req: DecisionRequest, submitted: JSON,
                       source: str = "harbor") -> DecisionResult:
@@ -523,10 +537,15 @@ AI assistant who plays the `{focal}` seat. The assistant cannot see this message
    Keep your private information to yourself unless you choose to share it.
 2. When it is your turn, call `{cp_turn}` with the same token and one action. The
    `message` in your action is what the assistant sees from you.
-3. After each of your turns, prompt the assistant through your bridge with a short
-   note, for example: "I've replied. Use your {service} tools: `{start}` to see where
+3. Whenever it is the assistant's turn, prompt them through your bridge with a short
+   note, then wait for their reply before calling a tool again. That is after each of
+   your turns, and also right at the start if `{cp_start}` says it is the other side's
+   turn (the assistant moves first). Only say you have replied if you have taken a
+   turn. For example: "I've replied. Use your {service} tools: `{start}` to see where
    things stand, then `{turn}`." In your first prompt, also tell them they are the
    `{focal}` in this episode and should start by calling `{start}`.
+   Don't restate your move or your private information in these notes: the assistant
+   sees your move through `{start}`.
 4. Repeat until a tool says the episode is over, then stop.
 
 Play your role as a real person in it would: pursue the goals it describes.

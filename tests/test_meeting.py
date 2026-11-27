@@ -115,7 +115,7 @@ def test_canary_runs_verifies_and_reports(tmp_path):
 
 def test_runs_through_the_harbor_sidecar():
     pytest.importorskip("mcp")
-    from parley_sim.adapters.harbor import HarborRuntime, RuntimeConfig, harbor_cells
+    from parley_sim.adapters.harbor import CHAT_NOTE, HarborRuntime, RuntimeConfig, harbor_cells
     from parley_sim.matched import build_grid
 
     cfg = load_config(ROOT / "configs" / "meeting-canary.yaml")
@@ -125,6 +125,7 @@ def test_runs_through_the_harbor_sidecar():
     rt = HarborRuntime(RuntimeConfig(cell=cell, token="t" * 24))
     text = asyncio.run(rt.start())
     assert "Your free slots" in text and "take_turn" in text
+    assert CHAT_NOTE not in text  # only when the other side is played from outside
     best = max(rt.episode.state.inst.free[mt.ASSISTANT].items(), key=lambda kv: kv[1])[0]
     for _ in range(10):
         if "Do not call any more tools" in text:
