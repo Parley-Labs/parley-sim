@@ -584,9 +584,16 @@ def test_counterpart_played_from_outside_through_tools():
                 assert err and "not for you" in text
                 _, agent_view = await tool("start_episode")
                 assert "assistant" in agent_view and "other side's turn" in agent_view
-                assert agent_view.count(CHAT_NOTE) == 1  # its chat replies reach the counterparty
+                assert agent_view.endswith(CHAT_NOTE)  # its chat replies reach the counterparty
+                # Out of turn, the agent is told plainly that nothing was recorded.
+                _, out = await tool("take_turn", action={"message": "Hi", "move": {"type": "none"}})
+                assert out.startswith("Your action was NOT recorded") and out.endswith(CHAT_NOTE)
                 _, cp_view = await tool("counterpart_start", token=cp_token)
                 assert "counterpart_take_turn" in cp_view and CHAT_NOTE not in cp_view
+                # A malformed counterpart action is a strike, and the counterpart is told at once.
+                _, out = await tool("counterpart_take_turn", token=cp_token, action={"move": "x"})
+                assert out.startswith("Your action could not be used") and CHAT_NOTE not in out
+                _, out = await tool("take_turn", action={"message": "Your move.", "move": {"type": "none"}})
                 inst = rt.episode.state.inst
                 mutual = sorted(set(inst.free[mt.ASSISTANT]) & set(inst.free[mt.CONTACT]))
                 _, out = await tool("counterpart_take_turn", token=cp_token, action={
@@ -595,7 +602,7 @@ def test_counterpart_played_from_outside_through_tools():
                 # Out of turn, the counterpart's move is not taken.
                 _, out = await tool("counterpart_take_turn", token=cp_token, action={
                     "message": "again", "move": {"type": "none"}})
-                assert "other side's turn" in out
+                assert out.startswith("Your action was NOT recorded")
                 _, out = await tool("take_turn", action={"message": "Sure.", "move": {"type": "accept"}})
                 assert "episode is over" in out
                 forbidden = (await c.get("/result")).status_code
@@ -605,7 +612,7 @@ def test_counterpart_played_from_outside_through_tools():
     assert forbidden == 403
     assert result["completed"] == 1 and result["verified"] == 1 and result["no_deal"] == 0
     sources = [(l["seat"], l["raw"]["source"]) for l in result["trace"] if l["type"] == "decision"]
-    assert sources == [("contact", "harbor-user"), ("assistant", "harbor")]
+    assert sources == [("contact", "harbor-user"), ("assistant", "harbor")] * 2
 
 
 def test_export_of_an_external_arm(tmp_path: Path):
@@ -617,7 +624,8 @@ def test_export_of_an_external_arm(tmp_path: Path):
     cp_token = instruction.split('token "')[1].split('"')[0]
     assert f'PARLEY_COUNTERPART_TOKEN: "{cp_token}"' in compose
     assert "counterpart_start" in instruction and "`contact` seat" in instruction
-    assert "Only say you have replied if you have taken a" in instruction
+    assert "before prompting the assistant" in instruction
+    assert '"propose"' in instruction  # the action format is inline
     # The result token stays out of the instruction (the counterparty must not read the score).
     toml = (task / "task.toml").read_text()
     result_token = toml.split('PARLEY_RESULT_TOKEN = "')[1].split('"')[0]

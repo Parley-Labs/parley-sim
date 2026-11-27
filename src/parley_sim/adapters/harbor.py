@@ -197,10 +197,11 @@ class RuntimeConfig:
 EXTERNAL = "external:"  # seat label prefix: played from outside, through the counterpart tools
 # Told to the agent under test when the other side is played from outside: in a Harbor
 # simulated-user trial the chat that prompts the agent is the counterparty itself.
-CHAT_NOTE = ("Note: the chat that prompts you here is the other side of this episode, not "
-             "someone on your side. Anything you write back in that chat reaches them, so keep "
-             "your private information out of it; a short reply such as \"Done, your turn.\" "
-             "is enough.")
+CHAT_REPLY = "Done, your turn."
+CHAT_NOTE = ("Important: the chat that prompts you is the other side of this episode, not someone "
+             "on your side. Everything you write in that chat reaches them, including notes while "
+             "you work. Act only through these tools, write nothing else in the chat, and end each "
+             f"of your turns with exactly this chat reply: \"{CHAT_REPLY}\"")
 TOOL_CP_START = "counterpart_start"
 TOOL_CP_TURN = "counterpart_take_turn"
 
@@ -304,9 +305,8 @@ class HarborRuntime:
                     + (f" Your score (value of the outcome to you): {score:g}." if score is not None else "")
                     + " Do not call any more tools.")
         if self.pending.seat != seat:
-            wait = (f"It is the other side's turn. Wait until they have replied, then call "
+            return (f"It is the other side's turn. Wait until they have replied, then call "
                     f"`{start}` to see what they did.")
-            return wait + (f"\n\n{CHAT_NOTE}" if self._chat_is_counterparty(seat) else "")
         _, user = self.text.render(self.pending.observation)
         user = _JSON_REPLY.sub("", user) + f"\n\nTake your turn with `{turn}`."
         strike = self.last_strike.get(seat)
@@ -324,16 +324,16 @@ class HarborRuntime:
                 await self._advance(self.episode.advance())
             episode = self.episode
             if episode.result is not None:
-                return self._prompt(seat)
+                return self._for(seat, self._prompt(seat))
             system, _ = self.text.render(episode.env.observe(episode.state, seat))
-            text = f"{system}\n\n{self._prompt(seat)}"
-            if self._chat_is_counterparty(seat) and CHAT_NOTE not in text:
-                text += f"\n\n{CHAT_NOTE}"
-            return text
+            return self._for(seat, f"{system}\n\n{self._prompt(seat)}")
 
-    def _chat_is_counterparty(self, seat: Seat) -> bool:
-        """True for the agent under test when another seat is played from outside."""
-        return seat not in self.external and bool(self.external)
+    def _for(self, seat: Seat, text: str) -> str:
+        """Every response to the agent under test, when the other side is played
+        from outside, ends with how to use the chat (it reaches the other side)."""
+        if seat in self.external or not self.external:
+            return text
+        return f"{text}\n\n{CHAT_NOTE}"
 
     def _focal_result(self, req: DecisionRequest, submitted: JSON,
                       source: str = "harbor") -> DecisionResult:
@@ -353,7 +353,9 @@ class HarborRuntime:
         async with self._lock:
             episode, req = self.episode, self.pending
             if episode is None or req is None or req.seat != seat:
-                return self._prompt(seat)
+                why = ("" if episode is not None and req is None  # over: the prompt says so
+                       else "Your action was NOT recorded: it is not your turn.\n\n")
+                return self._for(seat, why + self._prompt(seat))
             result = self._focal_result(req, action,
                                         source="harbor-user" if seat in self.external else "harbor")
             event = episode.advance(result)
@@ -362,7 +364,13 @@ class HarborRuntime:
                             and l["seat"] == seat)
             self.last_strike[seat] = decision["strike"]
             await self._advance(event)
-            return self._prompt(seat)
+            text = self._prompt(seat)
+            if decision["strike"] and not text.startswith("Your previous turn could not be used"):
+                # Not this seat's turn again yet, so the strike note wouldn't show.
+                detail = decision.get("detail") or decision["strike"]
+                text = (f"Your action could not be used ({detail}); it counted as your turn, "
+                        f"with no move.\n\n{text}")
+            return self._for(seat, text)
 
     def check_counterpart_token(self, token: str) -> None:
         if not self.external or not hmac.compare_digest(
@@ -533,20 +541,20 @@ You are playing one side of an interactive episode, the `{seat}` seat, against a
 AI assistant who plays the `{focal}` seat. The assistant cannot see this message.
 
 1. Call `{cp_start}` on the `{service}` MCP server with token "{token}". It tells you
-   your role, the rules, your private information and what has happened so far.
-   Keep your private information to yourself unless you choose to share it.
-2. When it is your turn, call `{cp_turn}` with the same token and one action. The
-   `message` in your action is what the assistant sees from you.
-3. Whenever it is the assistant's turn, prompt them through your bridge with a short
-   note, then wait for their reply before calling a tool again. That is after each of
-   your turns, and also right at the start if `{cp_start}` says it is the other side's
-   turn (the assistant moves first). Only say you have replied if you have taken a
-   turn. For example: "I've replied. Use your {service} tools: `{start}` to see where
-   things stand, then `{turn}`." In your first prompt, also tell them they are the
-   `{focal}` in this episode and should start by calling `{start}`.
-   Don't restate your move or your private information in these notes: the assistant
-   sees your move through `{start}`.
-4. Repeat until a tool says the episode is over, then stop.
+   your role, the rules, your private information, what has happened so far and whose
+   turn it is. Keep your private information to yourself unless you choose to share it.
+2. If it is your turn (it says "You speak first", or shows your turn), call `{cp_turn}`
+   with the same token and one action, before prompting the assistant. The `message` in
+   your action is what the assistant sees from you. An action is a JSON object matching:
+   {schema}
+   Check the tool's reply: if it says your action was not recorded or could not be used,
+   your move did not happen.
+3. When it is the assistant's turn, prompt them through your bridge with exactly this
+   note, then wait for their reply: "{nudge}" In your first prompt only, add: "You are
+   the `{focal}` in this episode." Don't add your move, your private information or
+   anything else: the assistant sees your move through `{start}`.
+4. When they reply, call `{cp_start}` to see what they did, and repeat from step 2 until
+   a tool says the episode is over, then stop.
 
 Play your role as a real person in it would: pursue the goals it describes.
 """
@@ -763,12 +771,20 @@ def export_task(out: Path, cell: HarborCell, *, chash: str, wheel: Path | None =
     external = sorted(s for s, label in cell.seats.items() if label.startswith(EXTERNAL))
     if len(external) > 1:
         raise ValueError("only one seat can be played from outside")
+    schema = envs.get(cell.env, allow_import=True).text().action_schema
+    try:
+        schema = inline_refs(schema)  # the oracle and the brief follow no $refs
+    except ValueError:
+        pass
     if external:
         cp_token = secrets.token_urlsafe(24)
         fmt["extra_env"] += f'      PARLEY_COUNTERPART_TOKEN: "{cp_token}"\n'
+        nudge = (f"Your turn. Use your {RUNTIME_SERVICE} tools: `{TOOL_START}` to see "
+                 f"where things stand, then `{TOOL_TURN}`.")
         (task / "instruction.md").write_text(COUNTERPART_INSTRUCTION.format(
             seat=external[0], focal=cell.focal_seat, token=cp_token, service=RUNTIME_SERVICE,
-            cp_start=TOOL_CP_START, cp_turn=TOOL_CP_TURN, start=TOOL_START, turn=TOOL_TURN))
+            cp_start=TOOL_CP_START, cp_turn=TOOL_CP_TURN, start=TOOL_START,
+            schema=json.dumps(schema), nudge=nudge))
     else:
         (task / "instruction.md").write_text(INSTRUCTION)
     (task / "task.toml").write_text(TASK_TOML.format(**fmt))
@@ -776,11 +792,6 @@ def export_task(out: Path, cell: HarborCell, *, chash: str, wheel: Path | None =
     (task / "environment" / "Dockerfile").write_text(MAIN_DOCKERFILE.format(**fmt))
     (task / "tests" / "test.sh").write_text(TEST_SH)
     (task / "tests" / "fetch_result.py").write_text(FETCH_RESULT)
-    schema = envs.get(cell.env, allow_import=True).text().action_schema
-    try:
-        schema = inline_refs(schema)  # the plumbing check follows no $refs
-    except ValueError:
-        pass
     (task / "solution" / "solve.sh").write_text(
         SOLVE_SH.replace("__SCHEMA__", base64.b64encode(json.dumps(schema).encode()).decode()))
     for sh in (task / "tests" / "test.sh", task / "solution" / "solve.sh"):
