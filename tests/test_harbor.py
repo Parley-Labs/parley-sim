@@ -826,7 +826,8 @@ def test_collect_recovers_from_an_interrupted_publish(tmp_path: Path):
     (out / "manifest.jsonl.collecting").unlink()
     (out / "traces.previous").mkdir()
     _recover_run(out)
-    assert not (out / "traces.previous").exists() and sorted(p.name for p in (out / "traces").iterdir()) == traces
+    assert not (out / "traces.previous").exists()
+    assert sorted(p.name for p in (out / "traces").iterdir()) == traces
     # Killed between the two moves: no traces/ at all.
     (out / "traces").rename(out / "traces.previous")
     (out / "manifest.jsonl.collecting").write_text("{}\n")
