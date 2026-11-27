@@ -237,6 +237,38 @@ def cmd_harbor_collect(args: argparse.Namespace) -> int:
     return 0 if counts["kept"] else 1
 
 
+def cmd_harbor_sweep(args: argparse.Namespace) -> int:
+    """Experimental: persona sweeps over Harbor's simulated-user trials."""
+    from parley_sim.adapters import harbor_sweep as hs
+
+    if args.sweep_cmd == "personas":
+        try:
+            paths = hs.write_personas(args.panel, args.out, args.n)
+        except (ImportError, ValueError) as exc:
+            print(exc, file=sys.stderr)
+            return 2
+        print(f"{len(paths)} persona files in {args.out} (they hold persona data: keep them private)")
+        return 0
+    if args.sweep_cmd == "plan":
+        personas: list[str | None] = [None] if args.include_default else []
+        for d in args.personas:
+            personas += sorted(str(p) for p in Path(d).glob("*.md"))
+        if not personas:
+            print("no personas: pass --personas DIR and/or --include-default", file=sys.stderr)
+            return 2
+        sys.stdout.write(hs.write_plan(args.tasks, personas, agent=args.agent, model=args.model,
+                                       user_agent=args.user_agent, user_model=args.user_model,
+                                       jobs=args.jobs, replicates=args.replicates))
+        return 0
+    rows = hs.collect([Path(d) for d in args.jobs], reward_key=args.reward_key)
+    if not rows:
+        print("no simulated-user trials found", file=sys.stderr)
+        return 1
+    report = hs.sweep_report(rows, baseline=args.baseline, margin=args.margin)
+    print(json.dumps(report, indent=2, default=str) if args.json else hs.render_sweep(report), end="")
+    return 0
+
+
 _ENV_HELP = ("environment name or import path (e.g. my_pkg.envs:ENTRY). Needed for an "
              "environment that is not built in, registered or installed: import paths "
              "recorded in traces and manifests are never imported on their own")
@@ -300,6 +332,30 @@ def main(argv: list[str] | None = None) -> int:
     hc.add_argument("--config", required=True, help="the config the tasks were exported from")
     hc.add_argument("--out", required=True, help="run directory to write")
     hc.set_defaults(func=cmd_harbor_collect)
+    hs = sub.add_parser("harbor-sweep",
+                        help="experimental: persona sweeps over Harbor's simulated-user trials")
+    hsub = hs.add_subparsers(dest="sweep_cmd", required=True)
+    hp = hsub.add_parser("personas", help="persona files from a UserSim panel, plus minimal.md")
+    hp.add_argument("--panel", required=True, help="UserSim panel parquet (or JSONL)")
+    hp.add_argument("--n", type=int, required=True, help="how many personas")
+    hp.add_argument("--out", required=True, help="directory for the persona files (keep private)")
+    hl = hsub.add_parser("plan", help="print a shell script of harbor runs, one per task and persona")
+    hl.add_argument("--tasks", nargs="+", required=True, help="Harbor task directories")
+    hl.add_argument("--personas", nargs="*", default=[], help="directories of persona .md files")
+    hl.add_argument("--include-default", action="store_true", help="also run Harbor's default persona")
+    hl.add_argument("--agent", required=True)
+    hl.add_argument("--model", required=True)
+    hl.add_argument("--user-agent", required=True)
+    hl.add_argument("--user-model", required=True)
+    hl.add_argument("--jobs", required=True, help="Harbor jobs directory")
+    hl.add_argument("--replicates", type=int, default=1, help="attempts per task and persona")
+    hr = hsub.add_parser("report", help="compare persona arms on the tasks' own rewards")
+    hr.add_argument("jobs", nargs="+", help="Harbor job or trial directories")
+    hr.add_argument("--baseline", default="harbor-default")
+    hr.add_argument("--margin", type=float, help="smallest delta that counts (enables verdicts)")
+    hr.add_argument("--reward-key", default="reward")
+    hr.add_argument("--json", action="store_true")
+    hs.set_defaults(func=cmd_harbor_sweep)
     args = p.parse_args(argv)
     return args.func(args)
 
