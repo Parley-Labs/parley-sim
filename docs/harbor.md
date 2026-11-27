@@ -90,7 +90,10 @@ parley-sim report run
 
 Each Harbor agent and model becomes a focal model (for example
 `claude-code.anthropic-claude-sonnet-5`), compared across arms on the same
-seeds as a local run. Only the first trial of each task per agent is kept.
+seeds as a local run. Only trials of tasks exported from this exact config
+(same config hash, recorded in each result) are used; trials of an edited
+config, even with the same `run_id`, are skipped and counted. Then only the
+first trial of each task per agent is kept.
 Counterpart token use is counted; the agent's own usage is in Harbor's results.
 
 ## Limits
