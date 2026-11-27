@@ -442,3 +442,97 @@ def test_collect_refuses_mixed_persona_panels(tmp_path: Path):
         _fake_trial(tmp_path / "job", f"t{i}", agent, result, f"2026-11-27T00:0{i}:00")
     with pytest.raises(ValueError, match="different persona panel"):
         collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], tmp_path / "run")
+
+
+def _nested_schema():
+    from typing import Literal
+
+    from pydantic import BaseModel
+
+    class Move(BaseModel):
+        type: Literal["a", "b"]
+
+    class Action(BaseModel):
+        message: str
+        move: Move
+        backup: Move | None = None
+
+    return Action.model_json_schema()
+
+
+def test_inline_refs():
+    from parley_sim.adapters.harbor import inline_refs
+
+    schema = _nested_schema()
+    assert "$defs" in schema
+    flat = inline_refs(schema)
+    assert "$defs" not in json.dumps(flat) and "$ref" not in json.dumps(flat)
+    assert flat["properties"]["move"]["properties"]["type"]["enum"] == ["a", "b"]
+    old_style = {"definitions": {"M": {"type": "integer"}}, "properties": {"m": {"$ref": "#/definitions/M"}}}
+    assert inline_refs(old_style) == {"properties": {"m": {"type": "integer"}}}
+    with pytest.raises(ValueError, match="recursive"):
+        inline_refs({"$defs": {"N": {"properties": {"next": {"$ref": "#/$defs/N"}}}},
+                     "properties": {"n": {"$ref": "#/$defs/N"}}})
+    with pytest.raises(ValueError, match="unresolvable"):
+        inline_refs({"properties": {"x": {"$ref": "#/$defs/Missing"}}})
+
+
+def _tools(rt):
+    app = create_runtime_app(rt)
+
+    async def go():
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://parley-runtime:8000") as c:
+                r = await c.post("/mcp", headers=HEADERS, json={"jsonrpc": "2.0", "id": 1,
+                                                                "method": "tools/list", "params": {}})
+                return {t["name"]: t for t in r.json()["result"]["tools"]}
+
+    return asyncio.run(go())
+
+
+def test_nested_action_schema_registers_inlined():
+    """A pydantic-generated schema with $defs/$ref used to crash tool
+    registration (KeyError '#/$defs/Move')."""
+    soc = next(c for c in cells(config()) if c.arm == "soc")
+    rt = HarborRuntime(RuntimeConfig(cell=soc, token=TOKEN))
+    rt.text = type("T", (), {"action_schema": _nested_schema()})()
+    action = _tools(rt)["take_turn"]["inputSchema"]["properties"]["action"]
+    assert action["properties"]["move"]["properties"]["type"]["enum"] == ["a", "b"]
+    assert "$ref" not in json.dumps(action)
+
+
+def test_recursive_action_schema_still_starts():
+    soc = next(c for c in cells(config()) if c.arm == "soc")
+    rt = HarborRuntime(RuntimeConfig(cell=soc, token=TOKEN))
+    recursive = {"$defs": {"N": {"type": "object", "properties": {"next": {"$ref": "#/$defs/N"}}}},
+                 "type": "object", "properties": {"n": {"$ref": "#/$defs/N"}}}
+    rt.text = type("T", (), {"action_schema": recursive})()
+    tool = _tools(rt)["take_turn"]
+    assert tool["inputSchema"]["properties"]["action"]["type"] == "object"
+    assert "#/$defs/N" in tool["description"]  # the full schema is still described
+
+
+def test_failed_collect_leaves_the_previous_run_intact(tmp_path: Path):
+    cfg = config()
+    agent = {"name": "claude-code", "model_name": "anthropic/claude-x"}
+    for i, cell in enumerate(cells(cfg)[:2]):
+        _, result, _ = play(cell, [accept_last] * 10)
+        _fake_trial(tmp_path / "good", f"t{i}", agent, result, f"2026-11-27T00:0{i}:00")
+    out = tmp_path / "run"
+    assert collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "good"], out)["kept"] == 2
+    (out / "notes.txt").write_text("mine")
+    before = {p.relative_to(out): p.read_bytes() for p in out.rglob("*") if p.is_file()}
+    # A later collect that fails part-way (mixed panels) must change nothing.
+    for i, (cell, digest) in enumerate([(cells(cfg)[2], "panel-a"), (cells(cfg)[3], "panel-b")]):
+        _, result, _ = play(cell, [accept_last] * 10)
+        result["persona_digest"] = digest
+        _fake_trial(tmp_path / "bad", f"b{i}", agent, result, f"2026-11-27T01:0{i}:00")
+    with pytest.raises(ValueError):
+        collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "good", tmp_path / "bad"], out)
+    after = {p.relative_to(out): p.read_bytes() for p in out.rglob("*") if p.is_file()}
+    assert after == before
+    # A successful re-collect of fewer trials leaves no stale traces behind.
+    assert collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "good" / "t0"], out)["kept"] == 1
+    assert len(list((out / "traces").glob("*.jsonl"))) == 1 and (out / "notes.txt").exists()
+    assert not (out / "traces.collecting").exists() and not (out / "traces.previous").exists()
