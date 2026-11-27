@@ -83,12 +83,13 @@ def play(cell: HarborCell, moves, client=None):
                     r.raise_for_status()
                     return r.json()["result"]["content"][0]["text"]
 
-                texts.append(await tool("start_negotiation"))
+                texts.append(await tool("start_episode"))
                 for move in moves:
                     if "Do not call any more tools" in texts[-1]:
                         break
                     m = move(texts[-1]) if callable(move) else move
-                    texts.append(await tool("take_turn", message="hi", move=m, explanation="x"))
+                    texts.append(await tool("take_turn", action={"message": "hi", "move": m,
+                                                                 "explanation": "x"}))
                 forbidden = (await c.get("/result")).status_code
                 result = (await c.get("/result", headers={"x-parley-token": TOKEN})).json()
         return texts, result, forbidden
@@ -173,7 +174,7 @@ def test_seed_secret_changes_the_scenario_but_still_verifies():
     soc = next(c for c in cells(config()) if c.arm == "soc")
     rt = HarborRuntime(RuntimeConfig(cell=soc, token=TOKEN, seed_secret="s" * 32))
     asyncio.run(rt.start())
-    asyncio.run(rt.take_turn("bye", {"type": "walk_away"}))
+    asyncio.run(rt.take_turn({"message": "bye", "move": {"type": "walk_away"}, "explanation": "x"}))
     result = rt.result()
     assert result["trace"][0]["spec"]["seed"] != soc.seed and result["verified"] == 1
 
@@ -286,8 +287,63 @@ def test_persona_counterpart_plays_from_the_mounted_panel(tmp_path: Path):
     rt = HarborRuntime(RuntimeConfig(cell=cell, token=TOKEN, persona_file=str(panel)),
                        client_factory=lambda spec: client)
     asyncio.run(rt.start())
-    asyncio.run(rt.take_turn("bye", {"type": "walk_away"}))
+    asyncio.run(rt.take_turn({"message": "bye", "move": {"type": "walk_away"}, "explanation": "x"}))
     result = rt.result()
     assert result["completed"] == 1 and result["verified"] == 1 and result["persona_digest"]
     with pytest.raises(ValueError, match="PARLEY_PERSONA_FILE"):
         HarborRuntime(RuntimeConfig(cell=cell, token=TOKEN))
+
+
+def test_take_turn_advertises_the_env_action_schema():
+    soc = next(c for c in cells(config()) if c.arm == "soc")
+    app = create_runtime_app(HarborRuntime(RuntimeConfig(cell=soc, token=TOKEN)))
+
+    async def go():
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://parley-runtime:8000") as c:
+                r = await c.post("/mcp", headers=HEADERS, json={"jsonrpc": "2.0", "id": 1,
+                                                                "method": "tools/list", "params": {}})
+                return {t["name"]: t for t in r.json()["result"]["tools"]}
+
+    tools = asyncio.run(go())
+    assert set(tools) == {"start_episode", "take_turn"}
+    action = tools["take_turn"]["inputSchema"]["properties"]["action"]
+    schema = envs.get("support_desk").text().action_schema
+    assert action["properties"] == schema["properties"] and action["required"] == schema["required"]
+
+
+def test_reward_metric_is_configurable_and_checked():
+    cfg = config()
+    joint = harbor_cells(build_grid(cfg), run_id=cfg.run_id, env=cfg.env, env_config={},
+                         lineup=cfg.lineup, reward_metric="joint_efficiency")
+    soc = next(c for c in joint if c.arm == "soc")
+    _, result, _ = play(soc, [accept_last] * 10)
+    assert result["reward"] == pytest.approx(result["metrics"]["joint_efficiency"] or 0.0)
+    with pytest.raises(ValueError, match="reward metric"):
+        harbor_cells(build_grid(cfg), run_id=cfg.run_id, env=cfg.env, env_config={},
+                     lineup=cfg.lineup, reward_metric="nope")
+
+
+def test_oracle_plays_any_env_to_the_end(tmp_path: Path):
+    """The generated solve.sh submits the smallest schema-valid action each turn."""
+    import base64
+    import re
+
+    soc = next(c for c in cells(config()) if c.arm == "soc")
+    task = export_task(tmp_path, soc, chash="x", wheel=_wheel(tmp_path))
+    solve = (task / "solution" / "solve.sh").read_text()
+    schema = json.loads(base64.b64decode(re.search(r'b64decode\("([^"]+)"\)', solve).group(1)))
+    assert schema == envs.get("support_desk").text().action_schema
+    ns: dict = {}
+    exec(solve[solve.index("def minimal"):solve.index('call("initialize"')], ns)
+    action = ns["minimal"](schema)
+    rt = HarborRuntime(RuntimeConfig(cell=soc, token=TOKEN))
+    text = asyncio.run(rt.start())
+    for _ in range(50):
+        if "Do not call any more tools" in text:
+            break
+        text = asyncio.run(rt.take_turn(action))
+    result = rt.result()
+    assert result["completed"] == 1 and result["verified"] == 1
+    assert all(l.get("strike") is None for l in result["trace"] if l["type"] == "decision")

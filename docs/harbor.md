@@ -18,26 +18,31 @@ One task plays one episode: one cell of the config's grid (seed, arm,
 replicate). The config's `focal_models` are not used; the agent under test is
 whatever you run the tasks with.
 
+- **Any environment.** The export works for any parley-sim environment
+  (built in, or [your own](custom-environments.md) installed in the sidecar
+  image), not only `support_desk`.
 - **Sidecar.** A `parley-runtime` service holds the episode and every
   counterpart seat: a scripted policy, a model, or a UserSim persona model. The
-  counterpart's private values, model and API key exist only there.
-- **Tools.** The agent gets two MCP tools: `start_negotiation` (role, private
-  information, rules, the counterpart's opening) and `take_turn` (a message,
-  one move, a short explanation). A move that doesn't parse is a strike, as for
-  a model seat.
+  counterparts' private information, models and API keys exist only there.
+- **Tools.** The agent gets two MCP tools: `start_episode` (role, rules,
+  private information, what has happened so far) and `take_turn` (one action;
+  its input schema is the environment's action schema). An action that doesn't
+  parse is a strike, as for a model seat.
 - **Scoring.** The verifier fetches the result from the sidecar with a
   per-task token that only the sidecar and the verifier hold. The sidecar
   replays the trace (`verify`) first. `reward.json`:
 
 | key | meaning |
 |---|---|
-| `reward` | `focal_surplus_share`, as in local runs (negative for a deal below the agent's walk-away). 0 if the episode didn't finish or verify. |
-| `no_deal` | 1 when the episode finished without a deal (its reward is 0) |
+| `reward` | The episode metric chosen with `--reward-metric` (default `focal_surplus_share`, as in local runs; negative for a deal below the agent's walk-away). 0 if the episode didn't finish or verify, or the metric is undefined. |
+| `no_deal` | 1 when the episode finished without a deal (its reward is 0). Only for environments with a `deal` metric. |
 | `completed` | 1 when the episode reached its end |
 | `verified` | 1 when the trace replays exactly |
 
 The verifier also saves the full trace (`verifier/trace.jsonl`) and the
-episode's metrics (`verifier/result.json`).
+episode's metrics (`verifier/result.json`). Each task's `solution/solve.sh`
+(Harbor's oracle agent) is a plumbing check, not a solution: it submits the
+smallest action the schema allows each turn and plays the episode to its end.
 
 ## Export
 

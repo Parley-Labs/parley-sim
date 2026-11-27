@@ -8,19 +8,22 @@ so the config's `focal_models` are not used.
 
 Each task's `parley-runtime` sidecar holds the episode and every counterpart
 seat (scripted policy, model, or UserSim persona model). The agent plays the
-focal seat through two MCP tools, `start_negotiation` and `take_turn`. The
-counterpart's private values, its model and its API key live only in the
-sidecar.
+focal seat through two MCP tools, `start_episode` and `take_turn`; a turn is
+one action in the environment's action schema, checked as a model seat's reply
+would be. The counterparts' private information, models and API keys live only
+in the sidecar. Any built-in or installed environment works; the sidecar image
+must contain it.
 
 The verifier fetches the result from the sidecar's `/result` route with a
 per-task token that only the sidecar and the verifier hold, so the agent cannot
 write what gets scored. The sidecar replays the trace (`verify`) before
 reporting it. Reward (`reward.json`):
 
-  reward     focal_surplus_share, as in local runs (negative for a deal below
-             the agent's walk-away); 0 if the episode didn't finish, didn't
-             verify, or the share is undefined
-  no_deal    1 when the episode finished without a deal
+  reward     the cell's reward metric, an episode metric of the environment
+             (default focal_surplus_share, as in local runs); 0 if the episode
+             didn't finish, didn't verify, or the metric is undefined
+  no_deal    1 when the episode finished without a deal; only for
+             environments with a `deal` metric
   completed  1 when the episode reached its end
   verified   1 when the trace replays exactly
 
@@ -45,7 +48,7 @@ import secrets
 import shutil
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from parley_sim import envs
 from parley_sim.core.hashing import digest
@@ -74,7 +77,7 @@ CLIENT = "client"  # the focal seat's label: played from outside, as in the Open
 RUNTIME_SERVICE = "parley-runtime"
 RUNTIME_PORT = 8000
 PERSONA_PATH = "/data/personas.parquet"  # where the user's persona panel is mounted
-TOOL_START = "start_negotiation"
+TOOL_START = "start_episode"
 TOOL_TURN = "take_turn"
 MAX_ACTION_CHARS = 20_000
 _PARSE_ERRORS = (MalformedOutput, RecursionError, ValueError, TypeError)
@@ -97,6 +100,7 @@ class HarborCell:
     seats: dict[Seat, str]  # counterpart seats only: "policy:<name>" | "model:<name>"
     env_config: dict[str, Any] = field(default_factory=dict)
     lineup: list[dict[str, Any]] = field(default_factory=list)  # specs of the model seats
+    reward_metric: str = "focal_surplus_share"
 
     @property
     def name(self) -> str:
@@ -111,11 +115,14 @@ class HarborCell:
 
 
 def harbor_cells(grid: list[Any], *, run_id: str, env: str, env_config: dict[str, Any],
-                 lineup: list[ModelSpec]) -> list[HarborCell]:
+                 lineup: list[ModelSpec], reward_metric: str = "focal_surplus_share") -> list[HarborCell]:
     """A matched grid without its focal model: one cell per (seed, arm,
     replicate), counterparts seated as a local run would seat them. `grid` is
     `parley_sim.matched.build_grid(cfg)`; the cells of its first focal model
     are used."""
+    kinds = envs.get(env, allow_import=True).metric_kinds
+    if reward_metric not in kinds:
+        raise ValueError(f"reward metric {reward_metric!r} is not one of {sorted(kinds)}")
     specs = {m.name: m for m in lineup}
     focal = grid[0].focal if grid else None
     out = []
@@ -128,7 +135,8 @@ def harbor_cells(grid: list[Any], *, run_id: str, env: str, env_config: dict[str
         out.append(HarborCell(run_id=run_id, env=env, seed=c.seed, arm=c.arm,
                               replicate=c.replicate, focal_seat=c.focal_seat, seats=seats,
                               env_config=dict(env_config),
-                              lineup=[specs[n].model_dump(exclude_none=True) for n in members]))
+                              lineup=[specs[n].model_dump(exclude_none=True) for n in members],
+                              reward_metric=reward_metric))
     return out
 
 
@@ -240,15 +248,16 @@ class HarborRuntime:
             return f"Call {TOOL_START} first."
         if self.pending is None:
             if self.error is not None:
-                return ("The negotiation ended early: your counterpart could not continue. "
+                return ("The episode ended early: a counterpart could not continue. "
                         "Do not call any more tools.")
             score = (episode.result.outcomes or {}).get(self.config.cell.focal_seat) \
                 if episode.result else None
-            return ("The negotiation is over."
+            return ("The episode is over."
                     + (f" Your score (value of the outcome to you): {score:g}." if score is not None else "")
                     + " Do not call any more tools.")
         _, user = self.text.render(self.pending.observation)
-        user = _JSON_REPLY.sub(f"\n\nTake your turn with `{TOOL_TURN}`.", user)
+        user = _JSON_REPLY.sub("", user) + f"\n\nTake your turn with `{TOOL_TURN}`."
+
         note = (f"Your previous turn could not be used ({self.last_strike}); "
                 "no move was made for it.\n\n" if self.last_strike else "")
         return note + user
@@ -256,7 +265,7 @@ class HarborRuntime:
     async def start(self) -> str:
         async with self._lock:
             if self.episode is not None:
-                return "The negotiation has already started. Current state:\n\n" + self._prompt()
+                return "The episode has already started. Current state:\n\n" + self._prompt()
             self.episode = self._build()
             await self._advance(self.episode.advance())
             if self.pending is None:
@@ -276,13 +285,12 @@ class HarborRuntime:
                                   detail=detail[:500], raw=raw)
         return DecisionResult(req.request_id, parsed, explanation=explanation, raw=raw)
 
-    async def take_turn(self, message: str, move: dict[str, Any], explanation: str = "") -> str:
+    async def take_turn(self, action: Any) -> str:
         async with self._lock:
             episode, req = self.episode, self.pending
             if episode is None or req is None:
                 return self._prompt()
-            result = self._focal_result(req, {"message": message, "move": move,
-                                              "explanation": explanation})
+            result = self._focal_result(req, action)
             event = episode.advance(result)
             decision = next(l for l in reversed(episode.lines) if l["type"] == "decision"
                             and l["seat"] == self.config.cell.focal_seat)
@@ -298,11 +306,11 @@ class HarborRuntime:
             "cell": {"run_id": cell.run_id, "seed": cell.seed, "arm": cell.arm,
                      "replicate": cell.replicate, "seats": cell.seats},
             "persona_digest": digest(self.personas) if self.personas is not None else None,
-            "completed": 0, "errored": 0, "reward": 0.0, "no_deal": 0, "verified": 0,
+            "completed": 0, "errored": 0, "reward": 0.0, "verified": 0,
             "problems": [], "metrics": {}, "trace": []}
         episode = self.episode
         if episode is None:
-            out["problems"] = ["the negotiation was never started"]
+            out["problems"] = ["the episode was never started"]
             return out
         lines = episode.lines
         if episode.result is None:
@@ -317,10 +325,11 @@ class HarborRuntime:
             return out
         problems = verify(self.entry.env(), lines, make_policy=self.entry.make_policy)
         metrics = self.entry.episode_metrics(lines)
-        share = metrics.get("focal_surplus_share")
+        value = metrics.get(cell.reward_metric)
         out.update(completed=1, verified=int(not problems), problems=problems, metrics=metrics,
-                   reward=float(share) if share is not None and not problems else 0.0,
-                   no_deal=int(metrics.get("deal") == 0.0))
+                   reward=float(value) if value is not None and not problems else 0.0)
+        if "deal" in metrics:
+            out["no_deal"] = int(metrics["deal"] == 0.0)
         return out
 
     async def aclose(self) -> None:
@@ -331,25 +340,29 @@ def create_runtime_app(runtime: HarborRuntime) -> Any:
     """The sidecar's ASGI app: MCP at /mcp, /health, and token-guarded /result."""
     from mcp.server.fastmcp import FastMCP
     from mcp.server.transport_security import TransportSecuritySettings
+    from pydantic import Field
     from starlette.requests import Request
     from starlette.responses import JSONResponse, PlainTextResponse
 
-    move_schema = runtime.text.action_schema["properties"]["move"]
+    schema = runtime.text.action_schema
     mcp = FastMCP("parley-runtime", stateless_http=True, json_response=True,
                   transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
 
     @mcp.tool(name=TOOL_START, description=(
-        "Start the negotiation (or see where it stands). Returns your role, your private "
-        "information and your counterpart's opening turn."))
-    async def start_negotiation() -> str:
+        "Start the episode (or see where it stands). Returns your role, the rules, your "
+        "private information and what has happened so far."))
+    async def start_episode() -> str:
         return await runtime.start()
 
-    @mcp.tool(name=TOOL_TURN, description=(
-        "Take your turn: a message to your counterpart, one move, and a one-sentence explanation "
-        "of the move. `move` is " + json.dumps(move_schema)
-        + ". Returns your counterpart's reply, or the end of the negotiation."))
-    async def take_turn(message: str, move: dict[str, Any], explanation: str = "") -> str:
-        return await runtime.take_turn(message, move, explanation)
+    async def take_turn(action: dict[str, Any]) -> str:
+        return await runtime.take_turn(action)
+
+    # A real annotation object (this module defers annotations), so the tool's
+    # input schema carries the environment's action schema.
+    take_turn.__annotations__["action"] = Annotated[dict[str, Any], Field(json_schema_extra=schema)]
+    mcp.tool(name=TOOL_TURN, description=(
+        "Take your turn: one action matching this JSON schema: " + json.dumps(schema)
+        + ". Returns what happens next, or the end of the episode."))(take_turn)
 
     @mcp.custom_route("/health", methods=["GET"])
     async def health(request: Request) -> PlainTextResponse:
@@ -374,16 +387,16 @@ def serve(host: str = "0.0.0.0", port: int = RUNTIME_PORT) -> None:
 # --------------------------------------------------------------------------- export
 
 INSTRUCTION = f"""\
-You are taking part in a negotiation. You play one side; your counterpart plays the other.
+You are taking part in an interactive episode with one or more counterparts.
 
 Use the MCP tools on the `{RUNTIME_SERVICE}` server:
-1. Call `{TOOL_START}` once. It tells you your role, your private information,
-   the rules and your counterpart's first turn.
-2. Then call `{TOOL_TURN}` once per turn with a `message`, a `move` and a short
-   `explanation`, until it says the negotiation is over.
+1. Call `{TOOL_START}` once. It tells you your role, the rules, your private
+   information and what has happened so far.
+2. Then call `{TOOL_TURN}` once per turn with one action, as its schema describes,
+   until it says the episode is over.
 
-Your score is the value of the final outcome to you, as described by `{TOOL_START}`.
-There are no files to write; the negotiation itself is graded.
+How you are scored is described by `{TOOL_START}`. There are no files to write;
+the episode itself is graded.
 """
 
 TASK_TOML = """\
@@ -392,10 +405,10 @@ schema_version = "1.1"
 [task]
 name = "{task_name}"
 authors = [{{ name = "Parley Labs" }}]
-keywords = ["parley-sim", "negotiation", "{env}", "{arm}"]
+keywords = ["parley-sim", "simulated-users", "{env}", "{arm}"]
 
 [metadata]
-category = "negotiation"
+category = "interactive"
 run_id = "{run_id}"
 seed = {seed}
 arm = "{arm}"
@@ -474,7 +487,7 @@ with open("/logs/verifier/trace.jsonl", "w") as f:
         f.write(json.dumps(line) + "\\n")
 with open("/logs/verifier/result.json", "w") as f:
     json.dump(result, f, indent=2)
-reward = {{k: result[k] for k in ("reward", "no_deal", "completed", "verified")}}
+reward = {{k: result[k] for k in ("reward", "no_deal", "completed", "verified") if k in result}}
 with open("/logs/verifier/reward.json", "w") as f:
     json.dump(reward, f)
 print(json.dumps(reward))
@@ -482,17 +495,17 @@ if result["problems"]:
     print("problems:", result["problems"])
 """
 
-# Plumbing check, not a strong player: hold one package, then accept the
-# counterpart's standing proposal on the last turn (an acceptance outside the
-# agent's limits is recorded as a strike).
+# Plumbing check, not a player: every turn submits the smallest action the
+# schema allows (preferring a no-op move), so the episode runs to its end.
 SOLVE_SH = f"""\
 #!/bin/bash
 set -euo pipefail
 python3 - <<'PY'
-import json, urllib.request
+import base64, json, urllib.request
 
 URL = "http://{RUNTIME_SERVICE}:{RUNTIME_PORT}/mcp"
 HEAD = {{"content-type": "application/json", "accept": "application/json, text/event-stream"}}
+SCHEMA = json.loads(base64.b64decode("__SCHEMA__"))
 
 def call(method, params, i=[0]):
     i[0] += 1
@@ -504,19 +517,34 @@ def tool(name, **args):
     out = call("tools/call", {{"name": name, "arguments": args}})["result"]
     return "".join(c.get("text", "") for c in out["content"])
 
+def minimal(s):
+    if "const" in s:
+        return s["const"]
+    if "enum" in s:
+        return next((x for x in ("none", "pass", "wait", "noop") if x in s["enum"]), s["enum"][0])
+    for key in ("anyOf", "oneOf"):
+        if key in s:
+            return minimal(s[key][0])
+    kind = s.get("type")
+    if kind == "object":
+        props = s.get("properties", {{}})
+        return {{k: minimal(props.get(k, {{}})) for k in s.get("required", [])}}
+    if kind in ("integer", "number"):
+        return s.get("minimum", 0)
+    if kind == "boolean":
+        return False
+    if kind == "array":
+        return []
+    return "Plumbing check."
+
 call("initialize", {{"protocolVersion": "2025-06-18", "capabilities": {{}},
                     "clientInfo": {{"name": "oracle", "version": "0"}}}})
 text = tool("{TOOL_START}")
 print(text)
-for _ in range(50):
+for _ in range(200):
     if "Do not call any more tools" in text:
         break
-    last = "Turns you have left, including this one: 1" in text
-    move = ({{"type": "accept"}} if last else
-            {{"type": "propose", "deal": {{"discount_pct": 20, "credit_usd": 25,
-                                         "upgrade": "none", "term": "annual"}}}})
-    text = tool("{TOOL_TURN}", message="Here is what I can do.", move=move,
-                explanation="Plumbing check.")
+    text = tool("{TOOL_TURN}", action=minimal(SCHEMA))
     print(text)
 PY
 """
@@ -585,7 +613,9 @@ def export_task(out: Path, cell: HarborCell, *, chash: str, wheel: Path | None =
     (task / "environment" / "Dockerfile").write_text(MAIN_DOCKERFILE.format(**fmt))
     (task / "tests" / "test.sh").write_text(TEST_SH)
     (task / "tests" / "fetch_result.py").write_text(FETCH_RESULT)
-    (task / "solution" / "solve.sh").write_text(SOLVE_SH)
+    schema = envs.get(cell.env, allow_import=True).text().action_schema
+    (task / "solution" / "solve.sh").write_text(
+        SOLVE_SH.replace("__SCHEMA__", base64.b64encode(json.dumps(schema).encode()).decode()))
     for sh in (task / "tests" / "test.sh", task / "solution" / "solve.sh"):
         sh.chmod(0o755)
     return task

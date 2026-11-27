@@ -210,8 +210,13 @@ def cmd_harbor_export(args: argparse.Namespace) -> int:
         if not secret:
             print(f"{args.seed_secret_env} is not set", file=sys.stderr)
             return 2
-    cells = harbor_cells(build_grid(cfg), run_id=cfg.run_id, env=cfg.env,
-                         env_config=cfg.env_config, lineup=cfg.lineup)
+    try:
+        cells = harbor_cells(build_grid(cfg), run_id=cfg.run_id, env=cfg.env,
+                             env_config=cfg.env_config, lineup=cfg.lineup,
+                             reward_metric=args.reward_metric)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
     chash = config_hash(cfg)
     for cell in cells:
         export_task(Path(args.out), cell, chash=chash, wheel=wheel, image=args.image,
@@ -282,6 +287,8 @@ def main(argv: list[str] | None = None) -> int:
     src = h.add_mutually_exclusive_group(required=True)
     src.add_argument("--wheel", help="parley-sim wheel the runtime sidecar builds from")
     src.add_argument("--image", help="prebuilt runtime sidecar image (see integrations/harbor)")
+    h.add_argument("--reward-metric", default="focal_surplus_share",
+                   help="episode metric Harbor records as the reward (default: focal_surplus_share)")
     h.add_argument("--seed-secret-env", help="environment variable holding a seed secret, for "
                    "private exports: scenarios can't then be computed from the seed")
     h.add_argument("--extra-ca", help="CA certificate to trust inside the images (local builds "
