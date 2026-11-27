@@ -6,9 +6,11 @@ agent (Claude Code, Codex, Terminus, your own) can play the focal seat against
 the same counterparts and seeds as a local run. `parley-sim harbor-collect`
 brings the results back for `parley-sim report`.
 
-Experimental in 0.0.x: tested end to end with Harbor 0.27 on local Docker,
-using Harbor's oracle agent and scripted counterparts. It hasn't yet been run
-with a model as the agent or as the counterpart.
+Experimental in 0.0.x. Tested end to end with Harbor 0.27 on local Docker:
+with Harbor's oracle agent and scripted counterparts, and in a small live run
+(6 tasks, 3 seeds) with Claude Code as the agent and a Claude customer. Every
+trace replayed exactly. That run checks the pipeline; it is too small for any
+result.
 
 ## How a task works
 
@@ -67,6 +69,9 @@ harbor run -p tasks -a claude-code -m anthropic/claude-sonnet-5 -n 4 -o jobs
 - **Persona arm.** Tasks with a UserSim persona counterpart mount your own
   panel: set `PARLEY_PERSONA_PANEL` to the parquet from `usersim panel` (see
   [personas.md](personas.md)). No persona data is written into the tasks.
+- **Image builds.** Docker Hub rate limits can fail a task's build before the
+  episode starts (no model calls are made). Re-run those tasks;
+  `harbor-collect` keeps only trials that reached the verifier.
 - **Timeouts.** A `take_turn` call returns after every counterpart has
   answered, which can take up to twice each counterpart's `timeout_s`. Agents
   whose MCP client times out sooner need a longer tool timeout.
