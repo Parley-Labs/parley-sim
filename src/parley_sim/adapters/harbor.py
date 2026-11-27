@@ -239,10 +239,16 @@ class HarborRuntime:
         try:
             while isinstance(event, DecisionRequest) and event.seat != self.config.cell.focal_seat:
                 event = episode.advance(await self.counterparts[event.seat].decide(event))
-        except Exception as exc:
+        except BaseException as exc:
+            # Any interruption, including a cancelled tool call, ends the
+            # episode as errored: the focal request it held has already been
+            # consumed, so it must not stay pending.
             if episode.result is None:
                 episode.abort(repr(exc))
             self.error = repr(exc)[:500]
+            self.pending = None
+            if not isinstance(exc, Exception):
+                raise
             event = episode.result
         self.pending = event if isinstance(event, DecisionRequest) else None
 
@@ -296,6 +302,7 @@ class HarborRuntime:
                 return self._prompt()
             result = self._focal_result(req, action)
             event = episode.advance(result)
+            self.pending = None  # consumed; _advance sets the next one
             decision = next(l for l in reversed(episode.lines) if l["type"] == "decision"
                             and l["seat"] == self.config.cell.focal_seat)
             self.last_strike = decision["strike"]
@@ -674,13 +681,19 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
         if cell["config_hash"] != chash or cell.get("run_id") != run_id:
             counts["other_config"] += 1
             continue
+        # Checked before deduplication too: one run must use one panel.
+        digest_here = result.get("persona_digest")
+        if digest_here:
+            if persona_digest and digest_here != persona_digest:
+                raise ValueError(f"{trial} used a different persona panel from earlier trials of "
+                                 f"this config; collect each panel's jobs separately")
+            persona_digest = digest_here
         focal = _focal_name(trial_config.get("agent") or {})
         key = (cell["seed"], focal, cell["arm"], cell["replicate"])
         if key in rows:
             counts["duplicates"] += 1
             continue
         focals[focal] = {"name": focal, "provider": "harbor", "model": focal}
-        persona_digest = result.get("persona_digest") or persona_digest
         cell_key = f"{run_id}-{cell['seed']}-{focal}-{cell['arm']}-r{cell['replicate']}"
         trace_rel = f"traces/{cell_key}.jsonl"
         done = bool(result.get("completed") and result.get("verified"))

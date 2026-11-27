@@ -394,3 +394,51 @@ def test_sidecar_loads_an_env_named_by_import_path(monkeypatch):
     rt = HarborRuntime(RuntimeConfig(cell=HarborCell.decode(cell.encode()), token=TOKEN))
     text = asyncio.run(rt.start())
     assert "take_turn" in text
+
+
+def test_cancelled_counterpart_turn_ends_the_episode_cleanly():
+    """A tool call cancelled while a counterpart decides must not leave the
+    consumed focal request pending (every later turn would then fail)."""
+
+    class Hanging(FakeClient):
+        async def complete(self, **kw):
+            await asyncio.Event().wait()
+
+    aoc = next(c for c in cells(config()) if c.arm == "aoc")
+    rt = HarborRuntime(RuntimeConfig(cell=aoc, token=TOKEN), client_factory=lambda spec: Hanging())
+
+    async def go():
+        await rt.start()  # the first turn may be the customer's: start it without hanging
+        turn = asyncio.create_task(rt.take_turn(
+            {"message": "hi", "move": PROPOSE, "explanation": "x"}))
+        await asyncio.sleep(0.05)
+        turn.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await turn
+        return await rt.take_turn({"message": "hi", "move": PROPOSE, "explanation": "x"})
+
+    rt_start = rt.start
+
+    async def start_without_hanging():
+        rt.clients = {k: FakeClient() for k in rt.clients}  # opening turn answers
+        out = await rt_start()
+        for seat in rt.counterparts.values():
+            seat.client = Hanging()
+        return out
+
+    rt.start = start_without_hanging
+    text = asyncio.run(go())
+    assert "ended early" in text
+    result = rt.result()
+    assert result["errored"] == 1 and result["completed"] == 0 and rt.pending is None
+
+
+def test_collect_refuses_mixed_persona_panels(tmp_path: Path):
+    cfg = config()
+    agent = {"name": "claude-code", "model_name": "anthropic/claude-x"}
+    for i, (cell, digest) in enumerate([(cells(cfg)[0], "panel-a"), (cells(cfg)[1], "panel-b")]):
+        _, result, _ = play(cell, [accept_last] * 10)
+        result["persona_digest"] = digest
+        _fake_trial(tmp_path / "job", f"t{i}", agent, result, f"2026-11-27T00:0{i}:00")
+    with pytest.raises(ValueError, match="different persona panel"):
+        collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], tmp_path / "run")
