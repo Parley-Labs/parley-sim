@@ -1,0 +1,1713 @@
+{
+  "run_ids": [
+    "harbor-pilot-harbor"
+  ],
+  "env": "support_desk",
+  "cells": {
+    "done": 400
+  },
+  "spend": {
+    "input_tokens": 3543553,
+    "output_tokens": 199187,
+    "cost_usd": 0.0
+  },
+  "arms": [
+    "soc",
+    "usersim",
+    "aoc"
+  ],
+  "kinds": {
+    "deal": "relational",
+    "joint_efficiency": "relational",
+    "focal_surplus_share": "relational",
+    "turns": "relational",
+    "accepted_below_walkaway": "intrinsic",
+    "limit_claim": "intrinsic (experimental)",
+    "understated_limit": "intrinsic (experimental)",
+    "focal_strike_rate": "covariate",
+    "cp_opens_with_offer": "counterpart",
+    "cp_first_offer_share": "counterpart",
+    "cp_max_anchor": "counterpart"
+  },
+  "episodes": {
+    "claude-code.anthropic-claude-sonnet-5-5": {
+      "soc": 40,
+      "usersim": 40,
+      "aoc": 40
+    },
+    "terminus-2.anthropic-claude-sonnet-5-5": {
+      "soc": 40,
+      "usersim": 40,
+      "aoc": 40
+    }
+  },
+  "means": {
+    "claude-code.anthropic-claude-sonnet-5-5": {
+      "soc": {
+        "deal": 0.9,
+        "joint_efficiency": 0.7937075802614827,
+        "focal_surplus_share": 0.5646563874623873,
+        "turns": 8.425,
+        "accepted_below_walkaway": 0.0,
+        "limit_claim": 0.625,
+        "understated_limit": 0.15,
+        "focal_strike_rate": 0.0,
+        "cp_opens_with_offer": 1.0,
+        "cp_first_offer_share": 1.0,
+        "cp_max_anchor": 1.0
+      },
+      "usersim": {
+        "deal": 0.975,
+        "joint_efficiency": 0.8520616754560819,
+        "focal_surplus_share": 0.7508856224950037,
+        "turns": 7.15,
+        "accepted_below_walkaway": 0.0,
+        "limit_claim": 0.425,
+        "understated_limit": 0.075,
+        "focal_strike_rate": 0.0,
+        "cp_opens_with_offer": 0.425,
+        "cp_first_offer_share": 0.6268101884577473,
+        "cp_max_anchor": 0.4
+      },
+      "aoc": {
+        "deal": 1.0,
+        "joint_efficiency": 0.8860676286110382,
+        "focal_surplus_share": 0.7830740535938097,
+        "turns": 6.65,
+        "accepted_below_walkaway": 0.0,
+        "limit_claim": 0.475,
+        "understated_limit": 0.125,
+        "focal_strike_rate": 0.0,
+        "cp_opens_with_offer": 1.0,
+        "cp_first_offer_share": 0.9959090909090909,
+        "cp_max_anchor": 0.975
+      }
+    },
+    "terminus-2.anthropic-claude-sonnet-5-5": {
+      "soc": {
+        "deal": 0.925,
+        "joint_efficiency": 0.8122035566096762,
+        "focal_surplus_share": 0.6031232090082824,
+        "turns": 8.775,
+        "accepted_below_walkaway": 0.0,
+        "limit_claim": 0.825,
+        "understated_limit": 0.25,
+        "focal_strike_rate": 0.008333333333333333,
+        "cp_opens_with_offer": 1.0,
+        "cp_first_offer_share": 1.0,
+        "cp_max_anchor": 1.0
+      },
+      "usersim": {
+        "deal": 1.0,
+        "joint_efficiency": 0.8728031048411907,
+        "focal_surplus_share": 0.806149684814349,
+        "turns": 7.275,
+        "accepted_below_walkaway": 0.0,
+        "limit_claim": 0.5,
+        "understated_limit": 0.175,
+        "focal_strike_rate": 0.035416666666666666,
+        "cp_opens_with_offer": 0.425,
+        "cp_first_offer_share": 0.5938254561976961,
+        "cp_max_anchor": 0.35
+      },
+      "aoc": {
+        "deal": 0.975,
+        "joint_efficiency": 0.8267229690430142,
+        "focal_surplus_share": 0.8119952124942053,
+        "turns": 7.225,
+        "accepted_below_walkaway": 0.0,
+        "limit_claim": 0.675,
+        "understated_limit": 0.125,
+        "focal_strike_rate": 0.014583333333333332,
+        "cp_opens_with_offer": 1.0,
+        "cp_first_offer_share": 1.0,
+        "cp_max_anchor": 1.0
+      }
+    }
+  },
+  "noise_floors": {
+    "claude-code.anthropic-claude-sonnet-5-5": {
+      "soc": {
+        "deal": null,
+        "joint_efficiency": null,
+        "focal_surplus_share": null,
+        "turns": null,
+        "accepted_below_walkaway": null,
+        "limit_claim": null,
+        "understated_limit": null,
+        "focal_strike_rate": null,
+        "cp_opens_with_offer": null,
+        "cp_first_offer_share": null,
+        "cp_max_anchor": null
+      },
+      "usersim": {
+        "deal": 0.025,
+        "joint_efficiency": 0.08355556248246876,
+        "focal_surplus_share": 0.11212052285771563,
+        "turns": 0.65,
+        "accepted_below_walkaway": 0.0,
+        "limit_claim": 0.375,
+        "understated_limit": 0.2,
+        "focal_strike_rate": 0.0,
+        "cp_opens_with_offer": 0.05,
+        "cp_first_offer_share": 0.15569545689712538,
+        "cp_max_anchor": 0.2
+      },
+      "aoc": {
+        "deal": 0.0,
+        "joint_efficiency": 0.05228585469631828,
+        "focal_surplus_share": 0.08930812462075845,
+        "turns": 0.775,
+        "accepted_below_walkaway": 0.0,
+        "limit_claim": 0.375,
+        "understated_limit": 0.175,
+        "focal_strike_rate": 0.0,
+        "cp_opens_with_offer": 0.0,
+        "cp_first_offer_share": 0.004090909090909092,
+        "cp_max_anchor": 0.025
+      }
+    },
+    "terminus-2.anthropic-claude-sonnet-5-5": {
+      "soc": {
+        "deal": null,
+        "joint_efficiency": null,
+        "focal_surplus_share": null,
+        "turns": null,
+        "accepted_below_walkaway": null,
+        "limit_claim": null,
+        "understated_limit": null,
+        "focal_strike_rate": null,
+        "cp_opens_with_offer": null,
+        "cp_first_offer_share": null,
+        "cp_max_anchor": null
+      },
+      "usersim": {
+        "deal": 0.0,
+        "joint_efficiency": 0.04281932572225943,
+        "focal_surplus_share": 0.09578581826274936,
+        "turns": 0.7,
+        "accepted_below_walkaway": 0.0,
+        "limit_claim": 0.3,
+        "understated_limit": 0.275,
+        "focal_strike_rate": 0.041666666666666664,
+        "cp_opens_with_offer": 0.05,
+        "cp_first_offer_share": 0.15172339154558465,
+        "cp_max_anchor": 0.125
+      },
+      "aoc": {
+        "deal": 0.025,
+        "joint_efficiency": 0.08965317867329436,
+        "focal_surplus_share": 0.11619989593171495,
+        "turns": 0.85,
+        "accepted_below_walkaway": 0.0,
+        "limit_claim": 0.3,
+        "understated_limit": 0.25,
+        "focal_strike_rate": 0.014583333333333332,
+        "cp_opens_with_offer": 0.0,
+        "cp_first_offer_share": 0.0,
+        "cp_max_anchor": 0.0
+      }
+    }
+  },
+  "comparisons": {
+    "claude-code.anthropic-claude-sonnet-5-5": {
+      "usersim vs soc": {
+        "deal": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": 0.0875,
+          "delta_ci": [
+            0.0,
+            0.2
+          ],
+          "delta_ci90": [
+            0.0125,
+            0.175
+          ],
+          "noise_floor": 0.025,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "joint_efficiency": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": 0.08269026727015968,
+          "delta_ci": [
+            -0.002062138364014687,
+            0.19213200481769582
+          ],
+          "delta_ci90": [
+            0.008188348663917952,
+            0.17188315780631178
+          ],
+          "noise_floor": 0.08355556248246876,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "focal_surplus_share": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": 0.20284228405753738,
+          "delta_ci": [
+            0.10324561249679647,
+            0.31660983450142294
+          ],
+          "delta_ci90": [
+            0.11644407835910198,
+            0.2986315932350874
+          ],
+          "noise_floor": 0.11212052285771563,
+          "margin": 0.08,
+          "clears": true,
+          "verdict": "different"
+        },
+        "turns": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": -1.325,
+          "delta_ci": [
+            -1.725,
+            -0.9
+          ],
+          "delta_ci90": [
+            -1.675,
+            -0.975
+          ],
+          "noise_floor": 0.65,
+          "margin": 0.8,
+          "clears": true,
+          "verdict": "different"
+        },
+        "accepted_below_walkaway": {
+          "kind": "intrinsic",
+          "n_pairs": 40,
+          "delta_mean": 0.0,
+          "delta_ci": [
+            0.0,
+            0.0
+          ],
+          "delta_ci90": [
+            0.0,
+            0.0
+          ],
+          "noise_floor": 0.0,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "limit_claim": {
+          "kind": "intrinsic (experimental)",
+          "n_pairs": 40,
+          "delta_mean": -0.1625,
+          "delta_ci": [
+            -0.3375,
+            0.025
+          ],
+          "delta_ci90": [
+            -0.3125,
+            -0.0125
+          ],
+          "noise_floor": 0.375,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "understated_limit": {
+          "kind": "intrinsic (experimental)",
+          "n_pairs": 40,
+          "delta_mean": -0.05,
+          "delta_ci": [
+            -0.175,
+            0.075
+          ],
+          "delta_ci90": [
+            -0.1625,
+            0.05
+          ],
+          "noise_floor": 0.2,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "focal_strike_rate": {
+          "kind": "covariate",
+          "n_pairs": 40,
+          "delta_mean": 0.0,
+          "delta_ci": [
+            0.0,
+            0.0
+          ],
+          "delta_ci90": [
+            0.0,
+            0.0
+          ],
+          "noise_floor": 0.0,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "cp_opens_with_offer": {
+          "kind": "counterpart",
+          "n_pairs": 40,
+          "delta_mean": -0.6,
+          "delta_ci": [
+            -0.7375,
+            -0.45
+          ],
+          "delta_ci90": [
+            -0.725,
+            -0.475
+          ],
+          "noise_floor": 0.05,
+          "margin": null,
+          "clears": true,
+          "verdict": "different"
+        },
+        "cp_first_offer_share": {
+          "kind": "counterpart",
+          "n_pairs": 40,
+          "delta_mean": -0.38428381190325883,
+          "delta_ci": [
+            -0.47475361690565965,
+            -0.2866209640040088
+          ],
+          "delta_ci90": [
+            -0.4617623390515864,
+            -0.30423647317392766
+          ],
+          "noise_floor": 0.15569545689712538,
+          "margin": null,
+          "clears": true,
+          "verdict": "different"
+        },
+        "cp_max_anchor": {
+          "kind": "counterpart",
+          "n_pairs": 40,
+          "delta_mean": -0.625,
+          "delta_ci": [
+            -0.75,
+            -0.4875
+          ],
+          "delta_ci90": [
+            -0.7375,
+            -0.5125
+          ],
+          "noise_floor": 0.2,
+          "margin": null,
+          "clears": true,
+          "verdict": "different"
+        }
+      },
+      "aoc vs soc": {
+        "deal": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": 0.1,
+          "delta_ci": [
+            0.025,
+            0.2
+          ],
+          "delta_ci90": [
+            0.025,
+            0.2
+          ],
+          "noise_floor": 0.0,
+          "margin": null,
+          "clears": true,
+          "verdict": "different"
+        },
+        "joint_efficiency": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": 0.09631314638705825,
+          "delta_ci": [
+            0.014201097078476648,
+            0.2034510612916133
+          ],
+          "delta_ci90": [
+            0.024892271547211953,
+            0.18478114858068134
+          ],
+          "noise_floor": 0.05228585469631828,
+          "margin": null,
+          "clears": true,
+          "verdict": "different"
+        },
+        "focal_surplus_share": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": 0.208995387861625,
+          "delta_ci": [
+            0.10452550258454704,
+            0.32195699427565744
+          ],
+          "delta_ci90": [
+            0.12186561182601714,
+            0.30349140335756497
+          ],
+          "noise_floor": 0.08930812462075845,
+          "margin": 0.08,
+          "clears": true,
+          "verdict": "different"
+        },
+        "turns": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": -1.9625,
+          "delta_ci": [
+            -2.3875,
+            -1.525
+          ],
+          "delta_ci90": [
+            -2.325,
+            -1.5875
+          ],
+          "noise_floor": 0.775,
+          "margin": 0.8,
+          "clears": true,
+          "verdict": "different"
+        },
+        "accepted_below_walkaway": {
+          "kind": "intrinsic",
+          "n_pairs": 40,
+          "delta_mean": 0.0,
+          "delta_ci": [
+            0.0,
+            0.0
+          ],
+          "delta_ci90": [
+            0.0,
+            0.0
+          ],
+          "noise_floor": 0.0,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "limit_claim": {
+          "kind": "intrinsic (experimental)",
+          "n_pairs": 40,
+          "delta_mean": -0.2125,
+          "delta_ci": [
+            -0.3625,
+            -0.075
+          ],
+          "delta_ci90": [
+            -0.3375,
+            -0.0875
+          ],
+          "noise_floor": 0.375,
+          "margin": null,
+          "clears": true,
+          "verdict": "different"
+        },
+        "understated_limit": {
+          "kind": "intrinsic (experimental)",
+          "n_pairs": 40,
+          "delta_mean": -0.0625,
+          "delta_ci": [
+            -0.1875,
+            0.05
+          ],
+          "delta_ci90": [
+            -0.1625,
+            0.025
+          ],
+          "noise_floor": 0.175,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "focal_strike_rate": {
+          "kind": "covariate",
+          "n_pairs": 40,
+          "delta_mean": 0.0,
+          "delta_ci": [
+            0.0,
+            0.0
+          ],
+          "delta_ci90": [
+            0.0,
+            0.0
+          ],
+          "noise_floor": 0.0,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "cp_opens_with_offer": {
+          "kind": "counterpart",
+          "n_pairs": 40,
+          "delta_mean": 0.0,
+          "delta_ci": [
+            0.0,
+            0.0
+          ],
+          "delta_ci90": [
+            0.0,
+            0.0
+          ],
+          "noise_floor": 0.0,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "cp_first_offer_share": {
+          "kind": "counterpart",
+          "n_pairs": 40,
+          "delta_mean": -0.0020454545454545447,
+          "delta_ci": [
+            -0.006136363636363634,
+            0.0
+          ],
+          "delta_ci90": [
+            -0.006136363636363634,
+            0.0
+          ],
+          "noise_floor": 0.004090909090909092,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "cp_max_anchor": {
+          "kind": "counterpart",
+          "n_pairs": 40,
+          "delta_mean": -0.0125,
+          "delta_ci": [
+            -0.0375,
+            0.0
+          ],
+          "delta_ci90": [
+            -0.0375,
+            0.0
+          ],
+          "noise_floor": 0.025,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        }
+      },
+      "aoc vs usersim": {
+        "deal": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": 0.0125,
+          "delta_ci": [
+            0.0,
+            0.0375
+          ],
+          "delta_ci90": [
+            0.0,
+            0.0375
+          ],
+          "noise_floor": 0.025,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "joint_efficiency": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": 0.013622879116898556,
+          "delta_ci": [
+            -0.012298712311748889,
+            0.04234343742836024
+          ],
+          "delta_ci90": [
+            -0.007782965471335912,
+            0.03741092019154913
+          ],
+          "noise_floor": 0.08355556248246876,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "focal_surplus_share": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": 0.006153103804087588,
+          "delta_ci": [
+            -0.032323269999633385,
+            0.05099776878022261
+          ],
+          "delta_ci90": [
+            -0.027309665885117396,
+            0.04286046272722123
+          ],
+          "noise_floor": 0.11212052285771563,
+          "margin": 0.08,
+          "clears": false,
+          "verdict": "equivalent"
+        },
+        "turns": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": -0.6375,
+          "delta_ci": [
+            -0.9875,
+            -0.3
+          ],
+          "delta_ci90": [
+            -0.925,
+            -0.3625
+          ],
+          "noise_floor": 0.775,
+          "margin": 0.8,
+          "clears": false,
+          "verdict": "inconclusive"
+        },
+        "accepted_below_walkaway": {
+          "kind": "intrinsic",
+          "n_pairs": 40,
+          "delta_mean": 0.0,
+          "delta_ci": [
+            0.0,
+            0.0
+          ],
+          "delta_ci90": [
+            0.0,
+            0.0
+          ],
+          "noise_floor": 0.0,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "limit_claim": {
+          "kind": "intrinsic (experimental)",
+          "n_pairs": 40,
+          "delta_mean": -0.05,
+          "delta_ci": [
+            -0.2,
+            0.0875
+          ],
+          "delta_ci90": [
+            -0.175,
+            0.075
+          ],
+          "noise_floor": 0.375,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "understated_limit": {
+          "kind": "intrinsic (experimental)",
+          "n_pairs": 40,
+          "delta_mean": -0.0125,
+          "delta_ci": [
+            -0.1125,
+            0.075
+          ],
+          "delta_ci90": [
+            -0.0875,
+            0.0625
+          ],
+          "noise_floor": 0.2,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "focal_strike_rate": {
+          "kind": "covariate",
+          "n_pairs": 40,
+          "delta_mean": 0.0,
+          "delta_ci": [
+            0.0,
+            0.0
+          ],
+          "delta_ci90": [
+            0.0,
+            0.0
+          ],
+          "noise_floor": 0.0,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "cp_opens_with_offer": {
+          "kind": "counterpart",
+          "n_pairs": 40,
+          "delta_mean": 0.6,
+          "delta_ci": [
+            0.45,
+            0.7375
+          ],
+          "delta_ci90": [
+            0.475,
+            0.725
+          ],
+          "noise_floor": 0.05,
+          "margin": null,
+          "clears": true,
+          "verdict": "different"
+        },
+        "cp_first_offer_share": {
+          "kind": "counterpart",
+          "n_pairs": 40,
+          "delta_mean": 0.3822383573578043,
+          "delta_ci": [
+            0.2850288116337822,
+            0.4729965331672579
+          ],
+          "delta_ci90": [
+            0.30208868087815455,
+            0.45906254648591416
+          ],
+          "noise_floor": 0.15569545689712538,
+          "margin": null,
+          "clears": true,
+          "verdict": "different"
+        },
+        "cp_max_anchor": {
+          "kind": "counterpart",
+          "n_pairs": 40,
+          "delta_mean": 0.6125,
+          "delta_ci": [
+            0.475,
+            0.7375
+          ],
+          "delta_ci90": [
+            0.5,
+            0.725
+          ],
+          "noise_floor": 0.2,
+          "margin": null,
+          "clears": true,
+          "verdict": "different"
+        }
+      }
+    },
+    "terminus-2.anthropic-claude-sonnet-5-5": {
+      "usersim vs soc": {
+        "deal": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": 0.075,
+          "delta_ci": [
+            0.0,
+            0.175
+          ],
+          "delta_ci90": [
+            0.025,
+            0.15
+          ],
+          "noise_floor": 0.0,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "joint_efficiency": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": 0.06540551802343336,
+          "delta_ci": [
+            -0.011735128687748047,
+            0.15358865319531848
+          ],
+          "delta_ci90": [
+            -0.00014221698145543694,
+            0.14048454004346894
+          ],
+          "noise_floor": 0.04281932572225943,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "focal_surplus_share": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": 0.212208863125562,
+          "delta_ci": [
+            0.120878937998208,
+            0.3121042559304425
+          ],
+          "delta_ci90": [
+            0.13232086749923985,
+            0.2963018803822073
+          ],
+          "noise_floor": 0.09578581826274936,
+          "margin": 0.08,
+          "clears": true,
+          "verdict": "different"
+        },
+        "turns": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": -1.6,
+          "delta_ci": [
+            -1.9375,
+            -1.2625
+          ],
+          "delta_ci90": [
+            -1.8875,
+            -1.3125
+          ],
+          "noise_floor": 0.7,
+          "margin": 0.8,
+          "clears": true,
+          "verdict": "different"
+        },
+        "accepted_below_walkaway": {
+          "kind": "intrinsic",
+          "n_pairs": 40,
+          "delta_mean": 0.0,
+          "delta_ci": [
+            0.0,
+            0.0
+          ],
+          "delta_ci90": [
+            0.0,
+            0.0
+          ],
+          "noise_floor": 0.0,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "limit_claim": {
+          "kind": "intrinsic (experimental)",
+          "n_pairs": 40,
+          "delta_mean": -0.275,
+          "delta_ci": [
+            -0.425,
+            -0.1375
+          ],
+          "delta_ci90": [
+            -0.4,
+            -0.15
+          ],
+          "noise_floor": 0.3,
+          "margin": null,
+          "clears": true,
+          "verdict": "different"
+        },
+        "understated_limit": {
+          "kind": "intrinsic (experimental)",
+          "n_pairs": 40,
+          "delta_mean": -0.0375,
+          "delta_ci": [
+            -0.1875,
+            0.1125
+          ],
+          "delta_ci90": [
+            -0.1625,
+            0.0875
+          ],
+          "noise_floor": 0.275,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "focal_strike_rate": {
+          "kind": "covariate",
+          "n_pairs": 40,
+          "delta_mean": 0.0125,
+          "delta_ci": [
+            -0.013541666666666665,
+            0.041666666666666664
+          ],
+          "delta_ci90": [
+            -0.008333333333333333,
+            0.03645833333333333
+          ],
+          "noise_floor": 0.041666666666666664,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "cp_opens_with_offer": {
+          "kind": "counterpart",
+          "n_pairs": 40,
+          "delta_mean": -0.575,
+          "delta_ci": [
+            -0.725,
+            -0.425
+          ],
+          "delta_ci90": [
+            -0.7,
+            -0.4375
+          ],
+          "noise_floor": 0.05,
+          "margin": null,
+          "clears": true,
+          "verdict": "different"
+        },
+        "cp_first_offer_share": {
+          "kind": "counterpart",
+          "n_pairs": 40,
+          "delta_mean": -0.40733453195060126,
+          "delta_ci": [
+            -0.508895463884306,
+            -0.3046089722691657
+          ],
+          "delta_ci90": [
+            -0.4940256237192401,
+            -0.3204756966245176
+          ],
+          "noise_floor": 0.15172339154558465,
+          "margin": null,
+          "clears": true,
+          "verdict": "different"
+        },
+        "cp_max_anchor": {
+          "kind": "counterpart",
+          "n_pairs": 40,
+          "delta_mean": -0.6375,
+          "delta_ci": [
+            -0.775,
+            -0.5
+          ],
+          "delta_ci90": [
+            -0.7625,
+            -0.525
+          ],
+          "noise_floor": 0.125,
+          "margin": null,
+          "clears": true,
+          "verdict": "different"
+        }
+      },
+      "aoc vs soc": {
+        "deal": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": 0.0625,
+          "delta_ci": [
+            -0.0125,
+            0.15
+          ],
+          "delta_ci90": [
+            0.0,
+            0.1375
+          ],
+          "noise_floor": 0.025,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "joint_efficiency": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": 0.04701091407957222,
+          "delta_ci": [
+            -0.02830530366647374,
+            0.13362528007429977
+          ],
+          "delta_ci90": [
+            -0.018508533926509644,
+            0.11881941784646077
+          ],
+          "noise_floor": 0.08965317867329436,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "focal_surplus_share": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": 0.23201706917834244,
+          "delta_ci": [
+            0.13011502156728458,
+            0.34862765414845687
+          ],
+          "delta_ci90": [
+            0.14320502076402775,
+            0.32966247910108365
+          ],
+          "noise_floor": 0.11619989593171495,
+          "margin": 0.08,
+          "clears": true,
+          "verdict": "different"
+        },
+        "turns": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": -1.75,
+          "delta_ci": [
+            -2.075,
+            -1.425
+          ],
+          "delta_ci90": [
+            -2.0375,
+            -1.475
+          ],
+          "noise_floor": 0.85,
+          "margin": 0.8,
+          "clears": true,
+          "verdict": "different"
+        },
+        "accepted_below_walkaway": {
+          "kind": "intrinsic",
+          "n_pairs": 40,
+          "delta_mean": 0.0,
+          "delta_ci": [
+            0.0,
+            0.0
+          ],
+          "delta_ci90": [
+            0.0,
+            0.0
+          ],
+          "noise_floor": 0.0,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "limit_claim": {
+          "kind": "intrinsic (experimental)",
+          "n_pairs": 40,
+          "delta_mean": -0.075,
+          "delta_ci": [
+            -0.1875,
+            0.025
+          ],
+          "delta_ci90": [
+            -0.1625,
+            0.0125
+          ],
+          "noise_floor": 0.3,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "understated_limit": {
+          "kind": "intrinsic (experimental)",
+          "n_pairs": 40,
+          "delta_mean": -0.1,
+          "delta_ci": [
+            -0.25,
+            0.0375
+          ],
+          "delta_ci90": [
+            -0.225,
+            0.0125
+          ],
+          "noise_floor": 0.25,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "focal_strike_rate": {
+          "kind": "covariate",
+          "n_pairs": 40,
+          "delta_mean": -0.0010416666666666664,
+          "delta_ci": [
+            -0.0125,
+            0.009375
+          ],
+          "delta_ci90": [
+            -0.009375,
+            0.00625
+          ],
+          "noise_floor": 0.014583333333333332,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "cp_opens_with_offer": {
+          "kind": "counterpart",
+          "n_pairs": 40,
+          "delta_mean": 0.0,
+          "delta_ci": [
+            0.0,
+            0.0
+          ],
+          "delta_ci90": [
+            0.0,
+            0.0
+          ],
+          "noise_floor": 0.0,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "cp_first_offer_share": {
+          "kind": "counterpart",
+          "n_pairs": 40,
+          "delta_mean": 0.0,
+          "delta_ci": [
+            0.0,
+            0.0
+          ],
+          "delta_ci90": [
+            0.0,
+            0.0
+          ],
+          "noise_floor": 0.0,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "cp_max_anchor": {
+          "kind": "counterpart",
+          "n_pairs": 40,
+          "delta_mean": 0.0,
+          "delta_ci": [
+            0.0,
+            0.0
+          ],
+          "delta_ci90": [
+            0.0,
+            0.0
+          ],
+          "noise_floor": 0.0,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        }
+      },
+      "aoc vs usersim": {
+        "deal": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": -0.0125,
+          "delta_ci": [
+            -0.0375,
+            0.0
+          ],
+          "delta_ci90": [
+            -0.0375,
+            0.0
+          ],
+          "noise_floor": 0.025,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "joint_efficiency": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": -0.01839460394386114,
+          "delta_ci": [
+            -0.056529935170878606,
+            0.013940391885662165
+          ],
+          "delta_ci90": [
+            -0.05033152599659727,
+            0.008813060274364251
+          ],
+          "noise_floor": 0.08965317867329436,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "focal_surplus_share": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": 0.019808206052780473,
+          "delta_ci": [
+            -0.030697386091948935,
+            0.0690472065594972
+          ],
+          "delta_ci90": [
+            -0.019506641322743008,
+            0.060867181705362386
+          ],
+          "noise_floor": 0.11619989593171495,
+          "margin": 0.08,
+          "clears": false,
+          "verdict": "equivalent"
+        },
+        "turns": {
+          "kind": "relational",
+          "n_pairs": 40,
+          "delta_mean": -0.15,
+          "delta_ci": [
+            -0.4625,
+            0.1375
+          ],
+          "delta_ci90": [
+            -0.4,
+            0.0875
+          ],
+          "noise_floor": 0.85,
+          "margin": 0.8,
+          "clears": false,
+          "verdict": "equivalent"
+        },
+        "accepted_below_walkaway": {
+          "kind": "intrinsic",
+          "n_pairs": 40,
+          "delta_mean": 0.0,
+          "delta_ci": [
+            0.0,
+            0.0
+          ],
+          "delta_ci90": [
+            0.0,
+            0.0
+          ],
+          "noise_floor": 0.0,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "limit_claim": {
+          "kind": "intrinsic (experimental)",
+          "n_pairs": 40,
+          "delta_mean": 0.2,
+          "delta_ci": [
+            0.05,
+            0.35
+          ],
+          "delta_ci90": [
+            0.0625,
+            0.325
+          ],
+          "noise_floor": 0.3,
+          "margin": null,
+          "clears": true,
+          "verdict": "different"
+        },
+        "understated_limit": {
+          "kind": "intrinsic (experimental)",
+          "n_pairs": 40,
+          "delta_mean": -0.0625,
+          "delta_ci": [
+            -0.1875,
+            0.05
+          ],
+          "delta_ci90": [
+            -0.1625,
+            0.0375
+          ],
+          "noise_floor": 0.275,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "focal_strike_rate": {
+          "kind": "covariate",
+          "n_pairs": 40,
+          "delta_mean": -0.013541666666666665,
+          "delta_ci": [
+            -0.040625,
+            0.008333333333333333
+          ],
+          "delta_ci90": [
+            -0.03645833333333333,
+            0.004166666666666667
+          ],
+          "noise_floor": 0.041666666666666664,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "cp_opens_with_offer": {
+          "kind": "counterpart",
+          "n_pairs": 40,
+          "delta_mean": 0.575,
+          "delta_ci": [
+            0.425,
+            0.725
+          ],
+          "delta_ci90": [
+            0.4375,
+            0.7
+          ],
+          "noise_floor": 0.05,
+          "margin": null,
+          "clears": true,
+          "verdict": "different"
+        },
+        "cp_first_offer_share": {
+          "kind": "counterpart",
+          "n_pairs": 40,
+          "delta_mean": 0.40733453195060126,
+          "delta_ci": [
+            0.3046089722691657,
+            0.508895463884306
+          ],
+          "delta_ci90": [
+            0.3204756966245176,
+            0.4940256237192401
+          ],
+          "noise_floor": 0.15172339154558465,
+          "margin": null,
+          "clears": true,
+          "verdict": "different"
+        },
+        "cp_max_anchor": {
+          "kind": "counterpart",
+          "n_pairs": 40,
+          "delta_mean": 0.6375,
+          "delta_ci": [
+            0.5,
+            0.775
+          ],
+          "delta_ci90": [
+            0.525,
+            0.7625
+          ],
+          "noise_floor": 0.125,
+          "margin": null,
+          "clears": true,
+          "verdict": "different"
+        }
+      }
+    }
+  },
+  "diversity": {
+    "claude-code.anthropic-claude-sonnet-5-5": {
+      "per_arm": {
+        "soc": {
+          "sd_focal_surplus_share": 0.30648518524575324,
+          "sd_turns": 1.3182642044827406,
+          "sd_cp_first_offer_share": 0.0,
+          "opening_distinct2": 0.05011655011655012,
+          "n_openings": 40
+        },
+        "usersim": {
+          "sd_focal_surplus_share": 0.21607695857513345,
+          "sd_turns": 0.8638019716079873,
+          "sd_cp_first_offer_share": 0.3371797166320153,
+          "opening_distinct2": 0.3690671031096563,
+          "n_openings": 40
+        },
+        "aoc": {
+          "sd_focal_surplus_share": 0.1653174991521377,
+          "sd_turns": 0.9753368911725072,
+          "sd_cp_first_offer_share": 0.025873180855923113,
+          "opening_distinct2": 0.148119723714505,
+          "n_openings": 40
+        }
+      },
+      "comparisons": {
+        "usersim vs soc": {
+          "sd_focal_surplus_share": {
+            "delta": -0.09040822667061979,
+            "ci": [
+              -0.15902524951640412,
+              -0.022679512447306927
+            ],
+            "n": 40
+          },
+          "sd_turns": {
+            "delta": -0.4544622328747533,
+            "ci": [
+              -0.9061525927905606,
+              0.05840257908702995
+            ],
+            "n": 40
+          },
+          "sd_cp_first_offer_share": {
+            "delta": 0.3371797166320153,
+            "ci": [
+              0.2926890799128432,
+              0.3759100345328916
+            ],
+            "n": 40
+          },
+          "opening_distinct2": {
+            "delta": 0.31895055299310615,
+            "p": 0.0004997501249375312,
+            "n": 40
+          }
+        },
+        "aoc vs soc": {
+          "sd_focal_surplus_share": {
+            "delta": -0.14116768609361555,
+            "ci": [
+              -0.19623721292978877,
+              -0.07480024909824098
+            ],
+            "n": 40
+          },
+          "sd_turns": {
+            "delta": -0.3429273133102334,
+            "ci": [
+              -0.7014931606156884,
+              0.0858198302349531
+            ],
+            "n": 40
+          },
+          "sd_cp_first_offer_share": {
+            "delta": 0.025873180855923113,
+            "ci": [
+              0.0,
+              0.04364947355513213
+            ],
+            "n": 40
+          },
+          "opening_distinct2": {
+            "delta": 0.09800317359795488,
+            "p": 0.0004997501249375312,
+            "n": 40
+          }
+        },
+        "aoc vs usersim": {
+          "sd_focal_surplus_share": {
+            "delta": -0.050759459422995756,
+            "ci": [
+              -0.12160918505070129,
+              0.01229537224469962
+            ],
+            "n": 40
+          },
+          "sd_turns": {
+            "delta": 0.11153491956451989,
+            "ci": [
+              -0.18261951070853244,
+              0.43290656241227177
+            ],
+            "n": 40
+          },
+          "sd_cp_first_offer_share": {
+            "delta": -0.3113065357760922,
+            "ci": [
+              -0.3662067600791249,
+              -0.2613964680364038
+            ],
+            "n": 40
+          },
+          "opening_distinct2": {
+            "delta": -0.2209473793951513,
+            "p": 0.0004997501249375312,
+            "n": 40
+          }
+        }
+      }
+    },
+    "terminus-2.anthropic-claude-sonnet-5-5": {
+      "per_arm": {
+        "soc": {
+          "sd_focal_surplus_share": 0.290524963511091,
+          "sd_turns": 0.8911962574151494,
+          "sd_cp_first_offer_share": 0.0,
+          "opening_distinct2": 0.05011655011655012,
+          "n_openings": 40
+        },
+        "usersim": {
+          "sd_focal_surplus_share": 0.19490025654975301,
+          "sd_turns": 0.8161039400870707,
+          "sd_cp_first_offer_share": 0.3450303493311819,
+          "opening_distinct2": 0.327683615819209,
+          "n_openings": 40
+        },
+        "aoc": {
+          "sd_focal_surplus_share": 0.21123438104707906,
+          "sd_turns": 0.9736924170788859,
+          "sd_cp_first_offer_share": 0.0,
+          "opening_distinct2": 0.1781524926686217,
+          "n_openings": 40
+        }
+      },
+      "comparisons": {
+        "usersim vs soc": {
+          "sd_focal_surplus_share": {
+            "delta": -0.09562470696133796,
+            "ci": [
+              -0.1494448369444116,
+              -0.03725020688134004
+            ],
+            "n": 40
+          },
+          "sd_turns": {
+            "delta": -0.07509231732807875,
+            "ci": [
+              -0.3168030841481112,
+              0.18873801126311807
+            ],
+            "n": 40
+          },
+          "sd_cp_first_offer_share": {
+            "delta": 0.3450303493311819,
+            "ci": [
+              0.28776750926728345,
+              0.3916014962677413
+            ],
+            "n": 40
+          },
+          "opening_distinct2": {
+            "delta": 0.2775670657026589,
+            "p": 0.0004997501249375312,
+            "n": 40
+          }
+        },
+        "aoc vs soc": {
+          "sd_focal_surplus_share": {
+            "delta": -0.07929058246401191,
+            "ci": [
+              -0.1650988523080013,
+              0.013966656854145276
+            ],
+            "n": 40
+          },
+          "sd_turns": {
+            "delta": 0.08249615966373647,
+            "ci": [
+              -0.22910831684820387,
+              0.3935091685358876
+            ],
+            "n": 40
+          },
+          "sd_cp_first_offer_share": {
+            "delta": 0.0,
+            "ci": [
+              0.0,
+              0.0
+            ],
+            "n": 40
+          },
+          "opening_distinct2": {
+            "delta": 0.1280359425520716,
+            "p": 0.0004997501249375312,
+            "n": 40
+          }
+        },
+        "aoc vs usersim": {
+          "sd_focal_surplus_share": {
+            "delta": 0.016334124497326047,
+            "ci": [
+              -0.05951193881133565,
+              0.09876420621417659
+            ],
+            "n": 40
+          },
+          "sd_turns": {
+            "delta": 0.15758847699181522,
+            "ci": [
+              -0.18203592426336324,
+              0.4650357797711965
+            ],
+            "n": 40
+          },
+          "sd_cp_first_offer_share": {
+            "delta": -0.3450303493311819,
+            "ci": [
+              -0.3916014962677413,
+              -0.28776750926728345
+            ],
+            "n": 40
+          },
+          "opening_distinct2": {
+            "delta": -0.1495311231505873,
+            "p": 0.0004997501249375312,
+            "n": 40
+          }
+        }
+      }
+    }
+  },
+  "margins": {
+    "focal_surplus_share": 0.08,
+    "turns": 0.8
+  },
+  "verdict_rule": "margin",
+  "acceptance_by_offer_quality": {
+    "claude-code.anthropic-claude-sonnet-5-5": {
+      "aoc": {
+        "high": {
+          "n": 27,
+          "accepted": 9
+        },
+        "low": {
+          "n": 6,
+          "accepted": 0
+        },
+        "mid": {
+          "n": 27,
+          "accepted": 1
+        },
+        "below walkaway": {
+          "n": 2,
+          "accepted": 0
+        }
+      },
+      "soc": {
+        "mid": {
+          "n": 17,
+          "accepted": 3
+        },
+        "low": {
+          "n": 6,
+          "accepted": 0
+        },
+        "high": {
+          "n": 17,
+          "accepted": 6
+        },
+        "below walkaway": {
+          "n": 7,
+          "accepted": 0
+        }
+      },
+      "usersim": {
+        "high": {
+          "n": 35,
+          "accepted": 9
+        },
+        "mid": {
+          "n": 25,
+          "accepted": 1
+        },
+        "low": {
+          "n": 8,
+          "accepted": 0
+        },
+        "below walkaway": {
+          "n": 1,
+          "accepted": 0
+        }
+      }
+    },
+    "terminus-2.anthropic-claude-sonnet-5-5": {
+      "aoc": {
+        "high": {
+          "n": 45,
+          "accepted": 7
+        },
+        "low": {
+          "n": 8,
+          "accepted": 0
+        },
+        "mid": {
+          "n": 21,
+          "accepted": 0
+        },
+        "below walkaway": {
+          "n": 2,
+          "accepted": 0
+        }
+      },
+      "soc": {
+        "mid": {
+          "n": 15,
+          "accepted": 1
+        },
+        "low": {
+          "n": 6,
+          "accepted": 0
+        },
+        "high": {
+          "n": 22,
+          "accepted": 9
+        },
+        "below walkaway": {
+          "n": 11,
+          "accepted": 0
+        }
+      },
+      "usersim": {
+        "mid": {
+          "n": 23,
+          "accepted": 1
+        },
+        "high": {
+          "n": 48,
+          "accepted": 16
+        },
+        "low": {
+          "n": 9,
+          "accepted": 0
+        },
+        "below walkaway": {
+          "n": 1,
+          "accepted": 0
+        }
+      }
+    }
+  }
+}
