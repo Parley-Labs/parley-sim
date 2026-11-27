@@ -42,6 +42,7 @@ import asyncio
 import base64
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
@@ -72,6 +73,8 @@ from parley_sim.runtime.episode import (
     verify,
 )
 from parley_sim.trace import read_trace
+
+_log = logging.getLogger(__name__)
 
 CLIENT = "client"  # the focal seat's label: played from outside, as in the OpenEnv adapter
 RUNTIME_SERVICE = "parley-runtime"
@@ -347,6 +350,33 @@ class HarborRuntime:
         await aclose_clients(list(self.clients.values()))
 
 
+def inline_refs(schema: JSON) -> JSON:
+    """`schema` with its local `$ref`s (to `#/$defs/...` or `#/definitions/...`)
+    replaced by the definitions they name, and those tables dropped, so it can
+    be embedded in another schema (an MCP tool's input). Raises ValueError for
+    a recursive or unresolvable reference."""
+    tables = {"#/$defs/": schema.get("$defs") or {}, "#/definitions/": schema.get("definitions") or {}}
+
+    def resolve(node: Any, seen: frozenset[str]) -> Any:
+        if isinstance(node, list):
+            return [resolve(v, seen) for v in node]
+        if not isinstance(node, dict):
+            return node
+        ref = node.get("$ref")
+        if isinstance(ref, str):
+            prefix = next((p for p in tables if ref.startswith(p)), None)
+            name = ref[len(prefix):] if prefix else None
+            if name is None or name not in tables[prefix]:
+                raise ValueError(f"unresolvable $ref {ref!r}")
+            if ref in seen:
+                raise ValueError(f"recursive $ref {ref!r}")
+            target = resolve(tables[prefix][name], seen | {ref})
+            return {**target, **{k: resolve(v, seen) for k, v in node.items() if k != "$ref"}}
+        return {k: resolve(v, seen) for k, v in node.items() if k not in ("$defs", "definitions")}
+
+    return resolve(schema, frozenset())
+
+
 def create_runtime_app(runtime: HarborRuntime) -> Any:
     """The sidecar's ASGI app: MCP at /mcp, /health, and token-guarded /result."""
     from mcp.server.fastmcp import FastMCP
@@ -356,6 +386,11 @@ def create_runtime_app(runtime: HarborRuntime) -> Any:
     from starlette.responses import JSONResponse, PlainTextResponse
 
     schema = runtime.text.action_schema
+    try:
+        tool_schema: JSON | None = inline_refs(schema)
+    except ValueError as exc:  # recursive: describe it in text, accept any object
+        _log.warning("action schema can't be inlined into the tool schema: %s", exc)
+        tool_schema = None
     mcp = FastMCP("parley-runtime", stateless_http=True, json_response=True,
                   transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
 
@@ -370,9 +405,10 @@ def create_runtime_app(runtime: HarborRuntime) -> Any:
 
     # A real annotation object (this module defers annotations), so the tool's
     # input schema carries the environment's action schema.
-    take_turn.__annotations__["action"] = Annotated[dict[str, Any], Field(json_schema_extra=schema)]
+    if tool_schema is not None:
+        take_turn.__annotations__["action"] = Annotated[dict[str, Any], Field(json_schema_extra=tool_schema)]
     mcp.tool(name=TOOL_TURN, description=(
-        "Take your turn: one action matching this JSON schema: " + json.dumps(schema)
+        "Take your turn: one action matching this JSON schema: " + json.dumps(tool_schema or schema)
         + ". Returns what happens next, or the end of the episode."))(take_turn)
 
     @mcp.custom_route("/health", methods=["GET"])
@@ -626,6 +662,10 @@ def export_task(out: Path, cell: HarborCell, *, chash: str, wheel: Path | None =
     (task / "tests" / "test.sh").write_text(TEST_SH)
     (task / "tests" / "fetch_result.py").write_text(FETCH_RESULT)
     schema = envs.get(cell.env, allow_import=True).text().action_schema
+    try:
+        schema = inline_refs(schema)  # the plumbing check follows no $refs
+    except ValueError:
+        pass
     (task / "solution" / "solve.sh").write_text(
         SOLVE_SH.replace("__SCHEMA__", base64.b64encode(json.dumps(schema).encode()).decode()))
     for sh in (task / "tests" / "test.sh", task / "solution" / "solve.sh"):
@@ -659,8 +699,6 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
     are used; then one trial per (task, agent) is kept, the earliest.
     Counterpart usage is counted; the agent's own usage is in Harbor's results."""
     run_id = config["run_id"]
-    out.mkdir(parents=True, exist_ok=True)
-    (out / "traces").mkdir(exist_ok=True)
     trials = sorted({p.parent.parent for d in job_dirs for p in Path(d).rglob("verifier/result.json")},
                     key=lambda t: (json.loads((t / "result.json").read_text()).get("started_at") or "")
                     if (t / "result.json").exists() else "")
@@ -668,6 +706,7 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
     focals: dict[str, dict[str, Any]] = {}
     counts = {"trials": 0, "kept": 0, "duplicates": 0, "other_config": 0, "no_config_hash": 0}
     persona_digest = None
+    copies: list[tuple[Path, str]] = []  # written only once every trial has been checked
     for trial in trials:
         counts["trials"] += 1
         result = json.loads((trial / "verifier" / "result.json").read_text())
@@ -699,7 +738,7 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
         done = bool(result.get("completed") and result.get("verified"))
         lines = read_trace(trial / "verifier" / "trace.jsonl") if done else []
         if done:
-            shutil.copy(trial / "verifier" / "trace.jsonl", out / trace_rel)
+            copies.append((trial / "verifier" / "trace.jsonl", trace_rel))
         rows[key] = {"type": "cell", "cell_key": cell_key,
                      "pair_key": f"{run_id}-{cell['seed']}-{focal}", "arm": cell["arm"],
                      "seed": cell["seed"], "focal": focal, "focal_seat": None,
@@ -716,7 +755,30 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
            "source": "harbor"}
     if persona_digest:
         run["persona_digest"] = persona_digest
-    with (out / "manifest.jsonl").open("w", encoding="utf-8") as f:
-        for row in [run, *rows.values()]:
-            f.write(json.dumps(row, sort_keys=True) + "\n")
+    _write_run(out, [run, *rows.values()], copies)
     return counts
+
+
+def _write_run(out: Path, rows: list[dict[str, Any]], copies: list[tuple[Path, str]]) -> None:
+    """Write a run directory so a failure leaves the previous one intact: the
+    traces go to a staging directory that replaces `traces/` only when all are
+    copied, then the manifest is replaced atomically. Nothing else in `out` is
+    touched."""
+    out.mkdir(parents=True, exist_ok=True)
+    staging, old = out / "traces.collecting", out / "traces.previous"
+    for d in (staging, old):
+        if d.exists():
+            shutil.rmtree(d)
+    staging.mkdir()
+    for src, rel in copies:
+        shutil.copy(src, staging / Path(rel).name)
+    tmp = out / "manifest.jsonl.collecting"
+    with tmp.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, sort_keys=True) + "\n")
+    if (out / "traces").exists():
+        (out / "traces").rename(old)
+    staging.rename(out / "traces")
+    os.replace(tmp, out / "manifest.jsonl")
+    if old.exists():
+        shutil.rmtree(old)
