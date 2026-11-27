@@ -231,8 +231,12 @@ def cmd_harbor_collect(args: argparse.Namespace) -> int:
     from parley_sim.matched import config_hash
 
     cfg = load_config(args.config)
-    counts = collect_jobs(cfg.model_dump(), config_hash(cfg), [Path(d) for d in args.jobs],
-                          Path(args.out))
+    try:
+        counts = collect_jobs(cfg.model_dump(), config_hash(cfg), [Path(d) for d in args.jobs],
+                              Path(args.out))
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
     print(", ".join(f"{k}: {v}" for k, v in counts.items()))
     return 0 if counts["kept"] else 1
 
