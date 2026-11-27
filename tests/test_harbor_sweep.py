@@ -107,6 +107,11 @@ def test_personas_from_a_panel(tmp_path: Path):
     assert meta["interaction_style"] == "confrontational"
     with pytest.raises(ValueError):
         hs.write_personas(panel, tmp_path / "out2", 5)
+    # A smaller rerun into the same directory leaves no stale personas; yours stay.
+    (tmp_path / "out" / "boss.md").write_text("my own persona")
+    hs.write_personas(panel, tmp_path / "out", 1)
+    assert sorted(p.name for p in (tmp_path / "out").glob("*.md")) == ["boss.md", "minimal.md",
+                                                                      "usersim-s00.md"]
 
 
 def test_a_requested_reward_key_is_not_replaced_by_another(tmp_path: Path):
@@ -132,3 +137,24 @@ def test_arm_mean_is_the_mean_of_task_means(tmp_path: Path):
     _trial(tmp_path, "b0", task="b", persona=None, reward=0.0)
     arm = hs.sweep_report(hs.collect([tmp_path]))["groups"][0]["arms"]["harbor-default"]
     assert arm["mean"] == 0.5 and arm["trials"] == 11 and arm["tasks"] == 2
+
+
+def test_overlapping_job_dirs_count_each_trial_once(tmp_path: Path):
+    _trial(tmp_path / "job", "t0", task="a", persona=None, reward=1.0)
+    assert len(hs.collect([tmp_path / "job", tmp_path / "job" / "t0"])) == 1
+
+
+def test_equivalence_bounds_are_inclusive():
+    assert hs._verdict(0.05, (-0.01, 0.125), (0.0, 0.125), 0.125) == "equivalent"
+
+
+def test_cli_json_report_is_strict_json_for_small_sweeps(tmp_path: Path, capsys):
+    from parley_sim.cli import main
+
+    for i in range(2):  # two tasks: no interval
+        _trial(tmp_path, f"d{i}", task=f"t{i}", persona=None, reward=1.0)
+        _trial(tmp_path, f"m{i}", task=f"t{i}", persona="minimal.md", reward=0.0)
+    assert main(["harbor-sweep", "report", str(tmp_path), "--json"]) == 0
+    out = capsys.readouterr().out
+    report = json.loads(out, parse_constant=lambda c: pytest.fail(f"non-standard JSON {c}"))
+    assert report["groups"][0]["comparisons"][0]["ci95"] == [None, None]

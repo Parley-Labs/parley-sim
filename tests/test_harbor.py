@@ -687,6 +687,7 @@ def test_export_of_an_external_arm(tmp_path: Path):
     toml = (task / "task.toml").read_text()
     result_token = toml.split('PARLEY_RESULT_TOKEN = "')[1].split('"')[0]
     assert result_token not in instruction
+    assert not (task / "solution").exists()  # the focal-only oracle could not finish these
 
 
 def _bridge_export(replies: list[str]) -> dict:
@@ -771,3 +772,30 @@ def test_chat_leaks_are_counted_for_unfinished_trials_too(tmp_path: Path):
         json.dumps(_bridge_export([f"{best} is worth {value:g} to me."])))
     counts = collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], tmp_path / "run")
     assert counts["chat_replies"] == 1 and counts["chat_leaks"] == 1
+
+
+def test_a_failed_re_export_leaves_the_previous_task(tmp_path: Path):
+    cfg = config()
+    cell = cells(cfg)[0]
+    task = export_task(tmp_path, cell, chash=config_hash(cfg), image="x")
+    before = (task / "task.toml").read_text()
+    with pytest.raises(ValueError, match="not a file"):
+        export_task(tmp_path, cell, chash=config_hash(cfg), image="x", extra_ca=tmp_path / "missing.crt")
+    assert (task / "task.toml").read_text() == before
+    assert [p.name for p in tmp_path.iterdir()] == [task.name]
+
+
+def test_inline_refs_keeps_properties_named_like_definition_tables():
+    from parley_sim.adapters.harbor import inline_refs
+
+    schema = {"type": "object", "required": ["definitions"],
+              "properties": {"definitions": {"type": "string"}, "n": {"$ref": "#/$defs/N"}},
+              "$defs": {"N": {"type": "integer"}}}
+    out = inline_refs(schema)
+    assert out["properties"] == {"definitions": {"type": "string"}, "n": {"type": "integer"}}
+    assert "$defs" not in out
+
+
+def test_cli_rejects_zero_harbor_user_replicates(tmp_path: Path, capsys):
+    assert main(["harbor-export", str(ROOT / "configs" / "meeting-canary.yaml"), "--out", str(tmp_path),
+                 "--image", "x", "--harbor-user-arm", "hu", "--harbor-user-replicates", "0"]) == 2

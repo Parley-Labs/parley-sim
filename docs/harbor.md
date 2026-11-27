@@ -37,7 +37,7 @@ whatever you run the tasks with.
 | key | meaning |
 |---|---|
 | `reward` | The episode metric chosen with `--reward-metric` (default `focal_surplus_share`, as in local runs; negative for a deal below the agent's walk-away). 0 if the episode didn't finish or verify, or the metric is undefined. |
-| `no_deal` | 1 when the episode finished without a deal (its reward is 0). Only for environments with a `deal` metric. |
+| `no_deal` | 1 when the episode finished without a deal (with the default metric, its reward is then 0). Only for environments with a `deal` metric. |
 | `completed` | 1 when the episode reached its end |
 | `verified` | 1 when the trace replays exactly |
 
@@ -156,6 +156,7 @@ parley-sim harbor-sweep personas --panel PANEL.parquet --n 5 --out personas   # 
 parley-sim harbor-sweep plan --tasks TASK... --personas personas --include-default \
   --agent claude-code --model anthropic/claude-sonnet-5-5 \
   --user-agent claude-code --user-model anthropic/claude-haiku-5-5 --jobs jobs > sweep.sh
+bash sweep.sh   # runs the trials
 parley-sim harbor-sweep report jobs --baseline harbor-default --margin 0.1
 ```
 

@@ -170,3 +170,10 @@ def test_calendar_density_is_bounded():
         with pytest.raises(ValueError, match="busy must be"):
             env.generate(1, {"busy": busy})
     assert len(env.ground_truth(env.generate(1, {"busy": mt.MAX_BUSY}))["mutual_slots"]) >= 4
+
+
+def test_chat_leak_reads_the_header_and_ignores_bracketed_durations():
+    header = {"type": "header", "instance": {"free": {mt.ASSISTANT: {"Mon 09:00": 8, "Wed 13:00": 2}}}}
+    assert mt.chat_leak([header], mt.ASSISTANT, "Mon 09:00 (8) suits us.")  # no decision needed
+    assert not mt.chat_leak([header], mt.ASSISTANT, "The meeting takes (2 hours).")
+    assert mt.chat_leak([header], mt.ASSISTANT, "Wed 13:00 (2).")

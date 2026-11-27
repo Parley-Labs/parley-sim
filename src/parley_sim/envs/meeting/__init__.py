@@ -372,19 +372,21 @@ def counterpart_opening(lines: list[JSON]) -> str | None:
 
 # --- chat leaks (Harbor simulated-user trials) ------------------------------------
 
-# A rating stated as a number: "worth 10", "value 8", "rates it 9", "(9)", "= 10", "7/10".
-_RATING = re.compile(r"(?:\b(?:worth|valued?|values?|rat(?:es?|ed|ing)|scor\w*)\D{0,20}?|\(\s*|=\s*)"
-                     r"(10|[1-9])(?![\d:])|\b(10|[1-9])\s*(?:/\s*10|out of 10)\b", re.I)
+# A rating stated as a number: "worth 10", "value 8", "rates it 9", "= 10", "7/10", or a
+# number alone in brackets, "(9)" ("(2 hours)" is not a rating).
+_RATING = re.compile(r"(?:\b(?:worth|valued?|values?|rat(?:es?|ed|ing)|scor\w*)\D{0,20}?|=\s*)"
+                     r"(10|[1-9])(?![\d:])|\b(10|[1-9])\s*(?:/\s*10|out of 10)\b"
+                     r"|\(\s*(10|[1-9])\s*\)", re.I)
 
 
 def chat_leak(lines: list[JSON], seat: Seat, text: str) -> bool:
     """Whether chat text outside the episode states one of the seat's private
     slot ratings as a number. Rankings without numbers ("my best slot") and
     busy times are not counted."""
-    values = set()
-    for line in lines:
-        if line.get("type") == "decision" and line.get("seat") == seat:
-            values = {int(v) for v in (line["observation"].get("calendar") or {}).values()
-                      if v is not None}
-            break
-    return any(int(m.group(1) or m.group(2)) in values for m in _RATING.finditer(text))
+    free = next((((line.get("instance") or {}).get("free") or {}).get(seat)
+                 for line in lines if line.get("type") == "header"), None)
+    if free is None:  # a focal-only trace has no header: the seat's observations have it
+        free = next(((line["observation"].get("calendar") or {}) for line in lines
+                     if line.get("type") == "decision" and line.get("seat") == seat), {})
+    values = {int(v) for v in free.values() if v is not None}
+    return any(int(next(g for g in m.groups() if g)) in values for m in _RATING.finditer(text))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
 import sys
 import tempfile
@@ -204,6 +205,9 @@ def cmd_harbor_export(args: argparse.Namespace) -> int:
     if wheel is not None and (not wheel.is_file() or wheel.suffix != ".whl"):
         print(f"--wheel {wheel}: not a wheel file (build one with `uv build --wheel`)", file=sys.stderr)
         return 2
+    if args.harbor_user_replicates < 1:
+        print("--harbor-user-replicates must be at least 1", file=sys.stderr)
+        return 2
     if args.seed_secret_env and not os.environ.get(args.seed_secret_env):
         print(f"{args.seed_secret_env} is not set (it must also be set when running the tasks)",
               file=sys.stderr)
@@ -270,8 +274,22 @@ def cmd_harbor_sweep(args: argparse.Namespace) -> int:
         print("no simulated-user trials found", file=sys.stderr)
         return 1
     report = hs.sweep_report(rows, baseline=args.baseline, margin=args.margin)
-    print(json.dumps(report, indent=2, default=str) if args.json else hs.render_sweep(report), end="")
+    if args.json:
+        print(json.dumps(_finite_or_null(report), indent=2, default=str, allow_nan=False))
+    else:
+        print(hs.render_sweep(report), end="")
     return 0
+
+
+def _finite_or_null(x):
+    """NaN and infinite statistics (too few tasks for an interval) as JSON null."""
+    if isinstance(x, float):
+        return x if math.isfinite(x) else None
+    if isinstance(x, dict):
+        return {k: _finite_or_null(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_finite_or_null(v) for v in x]
+    return x
 
 
 _ENV_HELP = ("environment name or import path (e.g. my_pkg.envs:ENTRY). Needed for an "

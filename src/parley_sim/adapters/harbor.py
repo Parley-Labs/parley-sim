@@ -458,9 +458,10 @@ def inline_refs(schema: JSON) -> JSON:
                 raise ValueError(f"recursive $ref {ref!r}")
             target = resolve(tables[prefix][name], seen | {ref})
             return {**target, **{k: resolve(v, seen) for k, v in node.items() if k != "$ref"}}
-        return {k: resolve(v, seen) for k, v in node.items() if k not in ("$defs", "definitions")}
+        return {k: resolve(v, seen) for k, v in node.items()}
 
-    return resolve(schema, frozenset())
+    root = {k: v for k, v in schema.items() if k not in ("$defs", "definitions")}
+    return resolve(root, frozenset())
 
 
 def create_runtime_app(runtime: HarborRuntime) -> Any:
@@ -742,10 +743,31 @@ def export_task(out: Path, cell: HarborCell, *, chash: str, wheel: Path | None =
     leave it unset for tasks you publish."""
     if (wheel is None) == (image is None):
         raise ValueError("give exactly one of wheel or image")
+    for path in (wheel, extra_ca):
+        if path is not None and not Path(path).is_file():
+            raise ValueError(f"not a file: {path}")
     cell = replace(cell, config_hash=chash)
-    task = out / cell.name
+    final = out / cell.name
+    # Built beside the final directory and swapped in at the end, so a failed
+    # export leaves an earlier export of this task usable.
+    task = out / f".{cell.name}.exporting"
     if task.exists():
         shutil.rmtree(task)
+    try:
+        _write_task(task, cell, wheel=wheel, image=image, dataset=dataset,
+                    agent_timeout=agent_timeout, seed_secret_env=seed_secret_env, extra_ca=extra_ca)
+    except BaseException:
+        shutil.rmtree(task, ignore_errors=True)
+        raise
+    if final.exists():
+        shutil.rmtree(final)
+    task.rename(final)
+    return final
+
+
+def _write_task(task: Path, cell: HarborCell, *, wheel: Path | None, image: str | None,
+                dataset: str, agent_timeout: float, seed_secret_env: str | None,
+                extra_ca: Path | None) -> None:
     (task / "environment").mkdir(parents=True)
     (task / "tests").mkdir()
     (task / "solution").mkdir()
@@ -786,7 +808,7 @@ def export_task(out: Path, cell: HarborCell, *, chash: str, wheel: Path | None =
         volumes = ("    volumes:\n      - ${PARLEY_PERSONA_PANEL:?set PARLEY_PERSONA_PANEL to your "
                    f"UserSim persona panel}}:{PERSONA_PATH}:ro\n")
     fmt = dict(task_name=f"{dataset}__{cell.name}", env=cell.env, run_id=cell.run_id, seed=cell.seed,
-               arm=cell.arm, replicate=cell.replicate, config_hash=chash, token=token,
+               arm=cell.arm, replicate=cell.replicate, config_hash=cell.config_hash, token=token,
                agent_timeout=agent_timeout, service=RUNTIME_SERVICE, port=RUNTIME_PORT,
                source=source, cell=cell.encode(), extra_env=extra_env, volumes=volumes, ca=ca)
     external = sorted(s for s, label in cell.seats.items() if label.startswith(EXTERNAL))
@@ -813,11 +835,15 @@ def export_task(out: Path, cell: HarborCell, *, chash: str, wheel: Path | None =
     (task / "environment" / "Dockerfile").write_text(MAIN_DOCKERFILE.format(**fmt))
     (task / "tests" / "test.sh").write_text(TEST_SH)
     (task / "tests" / "fetch_result.py").write_text(FETCH_RESULT)
+    (task / "tests" / "test.sh").chmod(0o755)
+    if external:
+        # The oracle plays the focal seat only; with the other side played from
+        # outside it could never finish an episode, so these tasks have none.
+        shutil.rmtree(task / "solution", ignore_errors=True)
+        return
     (task / "solution" / "solve.sh").write_text(
         SOLVE_SH.replace("__SCHEMA__", base64.b64encode(json.dumps(schema).encode()).decode()))
-    for sh in (task / "tests" / "test.sh", task / "solution" / "solve.sh"):
-        sh.chmod(0o755)
-    return task
+    (task / "solution" / "solve.sh").chmod(0o755)
 
 
 # --------------------------------------------------------------------------- collect

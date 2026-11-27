@@ -59,6 +59,12 @@ def write_personas(panel: str | Path, out: str | Path, n: int, locale: str = "en
         raise ValueError(f"the panel has {len(personas)} personas, fewer than {n}")
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
+    # Files an earlier run of this command wrote (they start with INVARIANTS),
+    # so a smaller rerun doesn't leave extra personas; files you wrote stay.
+    for old in [*out.glob("usersim-s*.md"), out / "minimal.md"]:
+        if old.is_file() and old.read_text().startswith(INVARIANTS):
+            old.unlink()
+            old.with_suffix(".json").unlink(missing_ok=True)
     paths = []
     for i, persona in enumerate(personas[:n]):
         block, meta = usersim_block(persona, locale)
@@ -106,8 +112,12 @@ def collect(job_dirs: list[str | Path], reward_key: str = "reward") -> list[dict
     """One row per Harbor trial that has a user agent: task, agent, model,
     user agent and model, arm, seed, reward (None if the trial produced none)."""
     rows = []
+    seen: set[Path] = set()  # a job directory and one of its trials, both given, count once
     for d in job_dirs:
         for result_path in sorted(Path(d).rglob("result.json")):
+            if result_path.resolve() in seen:
+                continue
+            seen.add(result_path.resolve())
             trial = result_path.parent
             config_path = trial / "config.json"
             if not config_path.exists():
@@ -191,7 +201,7 @@ def _verdict(point: float | None, ci95: tuple[float, float], ci90: tuple[float, 
         return "different" if excludes else "-"
     if excludes and abs(point) >= margin:
         return "different"
-    if -margin < ci90[0] and ci90[1] < margin:
+    if -margin <= ci90[0] and ci90[1] <= margin:  # inclusive, as parley-sim's report
         return "equivalent"
     return "inconclusive"
 
