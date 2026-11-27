@@ -24,6 +24,8 @@ whatever you run the tasks with.
 - **Sidecar.** A `parley-runtime` service holds the episode and every
   counterpart seat: a scripted policy, a model, or a UserSim persona model. The
   counterparts' private information, models and API keys exist only there.
+  Scripted counterparts are optional: use them for cheap mock runs and as a
+  baseline arm ([concepts](concepts.md#arms)).
 - **Tools.** The agent gets two MCP tools: `start_episode` (role, rules,
   private information, what has happened so far) and `take_turn` (one action;
   its input schema is the environment's action schema). An action that doesn't
@@ -121,8 +123,9 @@ tools say plainly when an action was not recorded (not their turn) or could not
 be used (a strike).
 
 Caveats:
-- **Small runs only so far.** The first run had 6 trials with Claude Code on
-  both sides; turn-taking over the bridge worked in all of them.
+- **Small runs only so far.** 19 harbor-user trials on `meeting_scheduling`
+  (Claude Code against Claude Code on Haiku 5.5), all completed and verified;
+  turn-taking over the bridge worked in every one. Not yet a study.
 - **Supported agents.** Harbor's bridge supports only some agents under test
   (Claude Code, Codex, Gemini CLI, OpenCode, Copilot CLI).
 - **Chat leaks.** Harbor sends everything the agent under test writes to the
@@ -139,6 +142,28 @@ Caveats:
   from its own logs.
 - **Token.** The two agents share one container, so the counterparty token is
   a guard against mistakes, not a security boundary.
+
+## Persona sweeps over Harbor's own simulated-user tasks (experimental)
+
+Harbor can run any task with a simulated user (`--user-agent`,
+`--user-persona-path`): the user agent gets the instruction and talks to the
+agent under test, and the task's verifier scores the result. `harbor-sweep`
+runs the same tasks under different personas and asks whether the agent's
+reward changes. The task is the matched unit, as the seed is in a local run.
+
+```bash
+parley-sim harbor-sweep personas --panel PANEL.parquet --n 5 --out personas   # keep private
+parley-sim harbor-sweep plan --tasks TASK... --personas personas --include-default \
+  --agent claude-code --model anthropic/claude-sonnet-5-5 \
+  --user-agent claude-code --user-model anthropic/claude-haiku-5-5 --jobs jobs > sweep.sh
+parley-sim harbor-sweep report jobs --baseline harbor-default --margin 0.1
+```
+
+Arms come from persona file names: `harbor-default` (no file), `usersim`
+(`usersim-sNN.md`, from a UserSim panel), `minimal` (a terse user), or any
+`<arm>.md` you write. The files `personas` writes, `minimal.md` included,
+start with the same rules for staying in character. Persona files built from a panel hold persona data; keep
+them out of version control. Not yet run with real agents.
 
 ## Report
 

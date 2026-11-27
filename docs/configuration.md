@@ -16,7 +16,7 @@ arms run into their own directory).
 | `focal_seat` | the env's default | Which seat is under test (`agent` in `support_desk`) |
 | `lineup` | required | Model specs, below |
 | `focal_models` | required | Lineup names to evaluate in the focal seat; each gets its own grid |
-| `scripted_counterparts` | required | Policy names for the `soc` arm |
+| `scripted_counterparts` | required | Policy names for the `soc` arm (leave the arm out with `run_arms`) |
 | `adaptive_counterparts` | required | Lineup names for the `aoc` arm |
 | `extra_arms` | `{}` | More model-counterpart arms, `{arm_name: [lineup names]}` |
 | `run_arms` | all | Only run these arms; the rest can live in another directory |

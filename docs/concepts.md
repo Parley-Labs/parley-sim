@@ -25,6 +25,17 @@ can add more:
 When an arm lists several counterparts, they rotate across seeds, so each is
 covered even when the environment has a single counterpart seat.
 
+Scripted counterparts are not needed to evaluate an agent: model, persona or
+[Harbor simulated-user](harbor.md#harbors-simulated-user-as-the-counterpart-experimental)
+counterparts are enough. Keep them for two jobs:
+- **Mock runs.** A config whose seats are all scripted makes no model calls
+  and needs no keys, so it is a free check of a config or an environment.
+- **A baseline.** The `soc` arm is the comparison that shows how far scripted
+  results are from adaptive ones, which is what parley-sim was built to measure.
+
+To leave the scripted arm out of a run, set `run_arms` (for example
+`run_arms: [aoc]`). `scripted_counterparts` must still name a policy.
+
 ## Matched pairs
 
 For every seed and focal model, parley-sim builds one cell per arm. The cells
