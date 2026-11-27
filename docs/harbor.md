@@ -6,11 +6,11 @@ agent (Claude Code, Codex, Terminus, your own) can play the focal seat against
 the same counterparts and seeds as a local run. `parley-sim harbor-collect`
 brings the results back for `parley-sim report`.
 
-Experimental in 0.0.x. Tested end to end with Harbor 0.27 on local Docker:
-with Harbor's oracle agent and scripted counterparts, and in a small live run
-(6 tasks, 3 seeds) with Claude Code as the agent and a Claude customer. Every
-trace replayed exactly. That run checks the pipeline; it is too small for any
-result.
+Experimental in 0.0.x. Tested end to end with Harbor 0.27 on local Docker,
+and used for a pre-registered run: 400 episodes with Claude Code and
+Terminus-2 as agents against scripted, plain Claude and UserSim persona
+customers, every trace verified. Results:
+[`results/README.md`](../results/README.md#harbor-pilot-pre-registered).
 
 ## How a task works
 

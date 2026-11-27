@@ -12,6 +12,11 @@ pinned to Anthropic, at low reasoning effort.
 Both use seeds 1060 to 1099, so `family-sd4`'s arms join `equiv-sd3`'s in
 [`joint-report.md`](family-sd4/joint-report.md).
 
+A third run, [`harbor-pilot`](#harbor-pilot-pre-registered), repeats the
+`equiv-sd3` question with full agent harnesses (Claude Code and Terminus-2)
+playing the agent through the [Harbor export](../docs/harbor.md), on fresh
+seeds.
+
 **The main metric.** `focal_surplus_share` is the agent's surplus (its value
 for the deal minus its value for no deal) divided by the most surplus it could
 have achieved in a deal both sides would accept. 0.68 means the agent got 68%
@@ -111,6 +116,44 @@ as plain customers, same prompt, no persona, no replicates.
 Spend: $7.60 reported by OpenRouter for the customer calls (Muse $6.67,
 Nemotron $0.94); the Claude agent calls were billed to our own Anthropic key.
 
+## harbor-pilot (pre-registered)
+
+The analysis plan is the header of
+[`configs/harbor-pilot.yaml`](../configs/harbor-pilot.yaml), committed
+before any episode existed. Agents: Harbor's `claude-code` and `terminus-2`,
+both on Claude Sonnet 5.5. Customers: scripted (`soc`), plain Claude Sonnet
+5.5 (`aoc`), and the same model with a NeMo UserSim persona (`usersim`).
+Seeds 1100 to 1139, two replicates for each LLM arm: 200 tasks per agent, 400
+episodes, all completed and verified. Verdict rule: margin (replicates
+averaged per seed), margins 0.08 surplus share and 0.8 turns. Report:
+[`harbor-pilot/report.md`](harbor-pilot/report.md).
+
+| Hypothesis | Agent | Result |
+| --- | --- | --- |
+| H1: plain and persona customers give equivalent agent outcomes (surplus share and turns) | Terminus-2 | **Supported.** Plain minus persona: surplus share +0.020 (90% CI -0.020 to +0.061), turns -0.15 (-0.40 to +0.09) |
+| | Claude Code | **Inconclusive.** Surplus share is equivalent, +0.006 (-0.027 to +0.043), but turns are not: -0.64 (-0.93 to -0.36), whose interval crosses the -0.8 margin. Episodes with persona customers ran slightly longer |
+| H2: agents score higher against an LLM customer than a scripted one | Claude Code | **Supported.** Plain LLM minus scripted surplus share +0.209 (95% CI +0.105 to +0.322) |
+| | Terminus-2 | **Supported.** +0.232 (95% CI +0.130 to +0.349) |
+
+Exploratory, not part of the plan:
+
+- The scripted-vs-LLM gap is about twice the one in `equiv-sd3` (+0.08 to
+  +0.12 there), where the agents were bare model calls and the customers Opus
+  and Sonnet. The harness, the customer model and the seeds all differ, so the
+  two runs don't isolate why.
+- Persona customers behave differently from plain ones: they open with an
+  offer 42% of the time (plain: 100%) and anchor far less hard
+  (`cp_max_anchor` 0.35 to 0.40, against about 1.0). The agents' surplus share
+  barely moves.
+
+Caveats: one agent model (Sonnet 5.5) and one customer model, both Claude;
+the agents answer through MCP tools rather than the JSON reply local runs use,
+so these numbers compare with each other, not with `equiv-sd3`'s. Spend: $26.94
+for the agents by Harbor's figures (Claude Code $12.78, Terminus-2 about
+$14.16) and about $9 for the customers, estimated
+from their tokens (the Anthropic API doesn't report cost, so the report's
+`Spend` line shows $0.00).
+
 ## What is and isn't here
 
 | Included | Withheld |
@@ -126,6 +169,9 @@ covers use for developing AI, but redistribution is not clearly covered, so
 we leave them out. Their results are in the published reports. Re-running
 the config with a freshly built panel reproduces the method, not these exact
 numbers, because a new panel draws different personas.
+
+For `harbor-pilot`, only the report is published. Its traces include the
+persona arm and agent transcripts and are kept privately with the full run.
 
 `scripts/curate_results.py` made this folder from the full run directories.
 
