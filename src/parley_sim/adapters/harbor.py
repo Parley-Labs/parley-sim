@@ -148,7 +148,7 @@ def harbor_cells(grid: list[Any], *, run_id: str, env: str, env_config: dict[str
         if external_arm in {c.arm for c in out}:
             raise ValueError(f"arm {external_arm!r} already exists in the config")
         seen: set[int] = set()
-        for c in [c for c in out if c.arm == "soc"]:
+        for c in list(out):  # one per seed, from whichever arms the config runs
             if c.seed in seen:
                 continue
             seen.add(c.seed)

@@ -556,6 +556,16 @@ def test_external_arm_cells():
         _meeting_cells(external_arm="soc")
 
 
+def test_external_arm_without_the_scripted_arm():
+    cfg = load_config(ROOT / "configs" / "meeting-canary.yaml").model_copy(update={"run_arms": ["aoc"]})
+    hc = harbor_cells(build_grid(cfg), run_id=cfg.run_id, env=cfg.env, env_config=cfg.env_config,
+                      lineup=cfg.lineup, external_arm="harbor-user")
+    ext = [c for c in hc if c.arm == "harbor-user"]
+    assert {c.arm for c in hc} == {"aoc", "harbor-user"}
+    assert sorted(c.seed for c in ext) == sorted({c.seed for c in hc if c.arm == "aoc"})
+    assert all(c.lineup == [] and c.seats == {"contact": "external:harbor-user"} for c in ext)
+
+
 def test_counterpart_played_from_outside_through_tools():
     """Both seats are played through tools, alternating, as Harbor's user
     agent (counterpart) and the agent under test would."""
