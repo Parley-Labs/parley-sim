@@ -630,3 +630,51 @@ def test_export_of_an_external_arm(tmp_path: Path):
     toml = (task / "task.toml").read_text()
     result_token = toml.split('PARLEY_RESULT_TOKEN = "')[1].split('"')[0]
     assert result_token not in instruction
+
+
+def _bridge_export(replies: list[str]) -> dict:
+    """An ACP session export as Harbor's bridge writes it (abridged)."""
+    messages = []
+    for text in replies:
+        messages.append({"User": {"content": [{"Text": "Your turn. Use your parley-runtime tools."}]}})
+        messages.append({"Agent": {"content": [{"ToolUse": {"name": "take_turn", "raw_input": "{}"}},
+                                               {"Text": text}]}})
+    return {"session": {"state": {"messages": messages}}}
+
+
+def test_bridge_replies_are_the_agents_text_only(tmp_path: Path):
+    from parley_sim.adapters.harbor import bridge_replies
+
+    path = tmp_path / "bridge-trajectory.json"
+    assert bridge_replies(path) is None
+    path.write_text(json.dumps(_bridge_export(["Try Fri 12:00 (9).", "Done, your turn."])))
+    assert bridge_replies(path) == ["Try Fri 12:00 (9).", "Done, your turn."]
+
+
+def test_collect_counts_chat_leaks_in_simulated_user_trials(tmp_path: Path):
+    from parley_sim.envs import meeting as mt
+
+    cfg, hc = _meeting_cells()
+    cell = next(c for c in hc if c.arm == "soc")
+    rt = HarborRuntime(RuntimeConfig(cell=cell, token=TOKEN))
+    asyncio.run(rt.start())
+    mine = rt.episode.state.inst.free[mt.ASSISTANT]
+    best, value = max(mine.items(), key=lambda kv: kv[1])
+    text = ""
+    for _ in range(12):
+        move = {"type": "propose", "slot": best}
+        text = asyncio.run(rt.take_turn({"message": "How about it?", "move": move}))
+        if "episode is over" in text:
+            break
+    result = rt.result()
+    assert "episode is over" in text and ("Booked:" in text or "No meeting was booked" in text)
+    _fake_trial(tmp_path / "job", "t0", {"name": "claude-code", "model_name": "anthropic/x"}, result,
+                "2026-11-27T00:00:00")
+    replies = [f"I proposed {best} (worth {value:g} to my manager).", "Done, your turn."]
+    agent_dir = tmp_path / "job" / "t0" / "agent"
+    agent_dir.mkdir()
+    (agent_dir / "bridge-trajectory.json").write_text(json.dumps(_bridge_export(replies)))
+    counts = collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], tmp_path / "run")
+    assert counts["kept"] == 1 and counts["chat_replies"] == 2 and counts["chat_leaks"] == 1
+    row = [json.loads(l) for l in (tmp_path / "run" / "manifest.jsonl").read_text().splitlines()][1]
+    assert row["chat"] == {"replies": replies, "leaks": 1}

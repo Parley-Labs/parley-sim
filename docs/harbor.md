@@ -126,9 +126,14 @@ Caveats:
 - **Supported agents.** Harbor's bridge supports only some agents under test
   (Claude Code, Codex, Gemini CLI, OpenCode, Copilot CLI).
 - **Chat leaks.** Harbor sends everything the agent under test writes to the
-  simulated user, and the sidecar never sees it, so information leaked in chat
-  is not in the trace. Count leaks from Harbor's bridge logs
-  (`agent/bridge-trajectory.json`).
+  simulated user, and the sidecar never sees it, so chat is not in the trace.
+  `harbor-collect` reads it from Harbor's bridge log
+  (`agent/bridge-trajectory.json`): each simulated-user trial's manifest row
+  gets `chat` (the agent's replies, and how many leak private information when
+  the environment can tell), and the totals are printed. For
+  `meeting_scheduling` a leak is a private slot rating stated as a number.
+  The log format is the ACP client's session export; the parser follows what
+  Harbor 0.27 wrote, so check the counts on a new Harbor version.
 - **Usage figures.** In these trials, Harbor's per-trial usage (`agent_result`)
   is the simulated user's, not the agent under test's; read the agent's usage
   from its own logs.

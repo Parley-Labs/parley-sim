@@ -134,3 +134,31 @@ def test_runs_through_the_harbor_sidecar():
                                          "move": {"type": "propose", "slot": best}}))
     result = rt.result()
     assert result["completed"] == 1 and result["verified"] == 1 and "no_deal" in result
+
+
+def test_chat_leak_counts_stated_ratings_only():
+    lines = [{"type": "decision", "seat": mt.ASSISTANT,
+              "observation": {"calendar": {"Mon 09:00": 8, "Thu 11:00": 10, "Wed 13:00": 2,
+                                           "Tue 10:00": None}}}]
+    for text in ("I countered with Thu 11:00 (worth 10 to my manager).", "Try Mon 09:00 (8).",
+                 "Thu 11:00 = 10 for me.", "Thursday 11:00, which my manager rates 10.",
+                 "Monday 09:00 (value 8 for my manager).", "Thu 11:00 is a 10/10."):
+        assert mt.chat_leak(lines, mt.ASSISTANT, text), text
+    for text in ("Done, your turn.", "Propose Wed 12:00 (best).", "Thu 11:00 works for us.",
+                 "Counter with a high-value slot.", "Mon 09:00 or Wed 13:00?", "worth 5 to me",
+                 "I have 3 options."):
+        assert not mt.chat_leak(lines, mt.ASSISTANT, text), text
+    assert not mt.chat_leak(lines, mt.CONTACT, "Thu 11:00 = 10 for me.")  # not that seat's values
+
+
+def test_accept_books_the_standing_proposal_and_says_so():
+    env, s = _state()
+    slot = env.ground_truth(s.inst)["mutual_slots"][0]
+    s, _ = env.apply(s, mt.CONTACT, {"message": "If not, Friday works too.",
+                                     "move": {"type": "propose", "slot": slot}})
+    s, _ = env.apply(s, mt.ASSISTANT, {"message": "Friday it is!", "move": {"type": "accept"}})
+    assert s.slot == slot
+    assert env.describe_end(s, mt.ASSISTANT) == (
+        f"Booked: {slot} (value to you: {s.inst.free[mt.ASSISTANT][slot]:g}).")
+    system, _ = mt.MeetingText().render(env.observe(_state()[1], mt.ASSISTANT))
+    assert "To book a slot they only mentioned in a message, `propose` it." in system

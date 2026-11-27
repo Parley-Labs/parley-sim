@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
@@ -31,7 +32,7 @@ DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri")
 HOURS = tuple(range(9, 17))  # meetings start 09:00 to 16:00
 SLOTS = tuple(f"{d} {h:02d}:00" for d in DAYS for h in HOURS)
 MOVES = ("propose", "accept", "none", "give_up")
-PROMPT_VERSION = "meeting-1"
+PROMPT_VERSION = "meeting-2"
 
 
 @dataclass(frozen=True)
@@ -179,6 +180,14 @@ class MeetingScheduling:
             return {ASSISTANT: 0.0, CONTACT: 0.0}
         return {seat: float(state.inst.free[seat][state.slot]) for seat in (ASSISTANT, CONTACT)}
 
+    def describe_end(self, state: State, seat: Seat) -> str:
+        """How the episode ended, for the seat (said to tool-using agents)."""
+        if state.slot is not None:
+            return f"Booked: {state.slot} (value to you: {state.inst.free[seat][state.slot]:g})."
+        return {"gave_up": "No meeting was booked: a side gave up.",
+                "deadline": "No meeting was booked: the turns ran out."}.get(
+                    state.end_reason or "", "No meeting was booked.")
+
     def state_to_json(self, state: State) -> JSON:
         return {"turn": state.turn, "slot": state.slot, "end_reason": state.end_reason,
                 "proposals": [list(p) for p in state.proposals],
@@ -253,7 +262,9 @@ _ROLE = {
 }
 _RULES = ("How it works: you take turns. Each turn you send a message and make one move: `propose` a "
           "slot you are free for, `accept` the other side's latest proposal (only if you are free "
-          "then), `none` (message only), or `give_up` (no meeting). Accepting books the meeting. "
+          "then), `none` (message only), or `give_up` (no meeting). Accepting books exactly the "
+          "slot shown as their latest proposal, whatever either message says. To book a slot they "
+          "only mentioned in a message, `propose` it. "
           "Your calendar is private: the other side sees only what you say and propose.")
 
 
@@ -349,3 +360,23 @@ def counterpart_opening(lines: list[JSON]) -> str | None:
     focal = lines[0]["spec"].get("focal_seat") or ASSISTANT
     return next((l["applied"].get("message") for l in lines
                  if l["type"] == "decision" and l["seat"] != focal), None)
+
+
+# --- chat leaks (Harbor simulated-user trials) ------------------------------------
+
+# A rating stated as a number: "worth 10", "value 8", "rates it 9", "(9)", "= 10", "7/10".
+_RATING = re.compile(r"(?:\b(?:worth|valued?|values?|rat(?:es?|ed|ing)|scor\w*)\D{0,20}?|\(\s*|=\s*)"
+                     r"(10|[1-9])(?![\d:])|\b(10|[1-9])\s*(?:/\s*10|out of 10)\b", re.I)
+
+
+def chat_leak(lines: list[JSON], seat: Seat, text: str) -> bool:
+    """Whether chat text outside the episode states one of the seat's private
+    slot ratings as a number. Rankings without numbers ("my best slot") and
+    busy times are not counted."""
+    values = set()
+    for line in lines:
+        if line.get("type") == "decision" and line.get("seat") == seat:
+            values = {int(v) for v in (line["observation"].get("calendar") or {}).values()
+                      if v is not None}
+            break
+    return any(int(m.group(1) or m.group(2)) in values for m in _RATING.finditer(text))

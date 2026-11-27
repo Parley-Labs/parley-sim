@@ -301,7 +301,9 @@ class HarborRuntime:
                 return ("The episode ended early: a counterpart could not continue. "
                         "Do not call any more tools.")
             score = (episode.result.outcomes or {}).get(seat) if episode.result else None
-            return ("The episode is over."
+            describe = getattr(episode.env, "describe_end", None)
+            end = f" {describe(episode.state, seat)}" if describe else ""
+            return ("The episode is over." + end
                     + (f" Your score (value of the outcome to you): {score:g}." if score is not None else "")
                     + " Do not call any more tools.")
         if self.pending.seat != seat:
@@ -388,7 +390,8 @@ class HarborRuntime:
         cell = self.config.cell
         out: dict[str, Any] = {
             "cell": {"run_id": cell.run_id, "config_hash": cell.config_hash, "seed": cell.seed,
-                     "arm": cell.arm, "replicate": cell.replicate, "seats": cell.seats},
+                     "arm": cell.arm, "replicate": cell.replicate, "seats": cell.seats,
+                     "focal_seat": cell.focal_seat},
             "persona_digest": digest(self.personas) if self.personas is not None else None,
             "completed": 0, "errored": 0, "reward": 0.0, "verified": 0,
             "problems": [], "metrics": {}, "trace": []}
@@ -873,6 +876,15 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
                      "usage": _usage(lines), "harbor_trial": str(trial)}
         if not done:
             rows[key]["error"] = "; ".join(result.get("problems") or []) or "not completed"
+        replies = bridge_replies(trial / "agent" / "bridge-trajectory.json")
+        if replies is not None:  # a simulated-user trial: the agent's chat reached the other side
+            leak = envs.get(config["env"], allow_import=True).chat_leak
+            seat = cell.get("focal_seat")
+            leaks = sum(leak(lines, seat, t) for t in replies) if leak and lines and seat else None
+            rows[key]["chat"] = {"replies": replies, "leaks": leaks}
+            counts["chat_replies"] = counts.get("chat_replies", 0) + len(replies)
+            if leaks is not None:
+                counts["chat_leaks"] = counts.get("chat_leaks", 0) + leaks
         counts["kept"] += 1
     config = json.loads(json.dumps(config))
     config["lineup"] = [*config["lineup"], *focals.values()]
@@ -883,6 +895,27 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
         run["persona_digest"] = persona_digest
     _write_run(out, [run, *rows.values()], copies)
     return counts
+
+
+def bridge_replies(path: Path) -> list[str] | None:
+    """The agent under test's chat replies in a Harbor simulated-user trial,
+    from the ACP bridge's session export (`agent/bridge-trajectory.json`):
+    every text block it wrote, in order. None when there is no bridge log."""
+    try:
+        export = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    messages = ((export.get("session") or {}).get("state") or {}).get("messages") or []
+    replies: list[str] = []
+    for message in messages:
+        for role, body in (message.items() if isinstance(message, dict) else ()):
+            if role.lower() == "user" or not isinstance(body, dict):
+                continue  # the simulated user's prompts
+            for block in body.get("content") or []:
+                text = block.get("Text") if isinstance(block, dict) else None
+                if isinstance(text, str) and text.strip():
+                    replies.append(text)
+    return replies
 
 
 def _write_run(out: Path, rows: list[dict[str, Any]], copies: list[tuple[Path, str]]) -> None:

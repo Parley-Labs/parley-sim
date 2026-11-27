@@ -24,9 +24,14 @@ An `EnvEntry` (from `parley_sim.envs`) bundles:
 | `metric_kinds` | `{metric: kind}`, one of intrinsic, relational, covariate, counterpart |
 | `decision_rows` | `(trace_lines) -> rows` for the acceptance table; return `[]` to skip it |
 
-Two optional hooks unlock more of the report: `counterpart_opening` (the
-counterpart's first message, for wording diversity) and `claim_rows` (for
-[claim validation](claims.md)).
+Optional hooks unlock more:
+- `counterpart_opening`: the counterpart's first message, for wording diversity.
+- `claim_rows`: for [claim validation](claims.md).
+- `chat_leak`: `(trace_lines, seat, text) -> bool`, whether chat text outside
+  the episode reveals the seat's private information. Used to count leaks in
+  Harbor simulated-user trials ([harbor.md](harbor.md)).
+- `describe_end` (a method on the environment): `(state, seat) -> str`, how the
+  episode ended, told to tool-using agents (for example, the slot booked).
 
 ## The environment
 
