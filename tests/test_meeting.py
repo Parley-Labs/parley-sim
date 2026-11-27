@@ -162,3 +162,11 @@ def test_accept_books_the_standing_proposal_and_says_so():
         f"Booked: {slot} (value to you: {s.inst.free[mt.ASSISTANT][slot]:g}).")
     system, _ = mt.MeetingText().render(env.observe(_state()[1], mt.ASSISTANT))
     assert "To book a slot they only mentioned in a message, `propose` it." in system
+
+
+def test_calendar_density_is_bounded():
+    env = mt.MeetingScheduling()
+    for busy in (1.0, -0.1, 0.9):
+        with pytest.raises(ValueError, match="busy must be"):
+            env.generate(1, {"busy": busy})
+    assert len(env.ground_truth(env.generate(1, {"busy": mt.MAX_BUSY}))["mutual_slots"]) >= 4

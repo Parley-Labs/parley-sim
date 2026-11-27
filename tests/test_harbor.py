@@ -225,11 +225,13 @@ def test_export_persona_arm_mounts_the_users_panel(tmp_path: Path):
                  extra_arms={"usersim": ["llm-p"]}, persona_file="panel.parquet")
     cell = next(c for c in cells(cfg) if c.arm == "usersim")
     task = export_task(tmp_path / "out", cell, chash=config_hash(cfg), image="parley-runtime:test",
-                       seed_secret="x" * 32)
+                       seed_secret_env="MY_SEED_SECRET")
     compose = (task / "environment" / "docker-compose.yaml").read_text()
     assert "image: parley-runtime:test" in compose and "build:" not in compose
     assert "${PARLEY_PERSONA_PANEL:?" in compose and "panel.parquet" not in compose
-    assert 'PARLEY_SEED_SECRET: "' + "x" * 32 in compose
+    assert 'PARLEY_SEED_SECRET: "${MY_SEED_SECRET:?' in compose  # passed through, never written
+    with pytest.raises(ValueError, match="not an environment variable"):
+        export_task(tmp_path / "out2", cell, chash=config_hash(cfg), image="x", seed_secret_env='a"b')
     assert not (task / "environment" / "runtime").exists()
 
 
@@ -539,6 +541,51 @@ def test_failed_collect_leaves_the_previous_run_intact(tmp_path: Path):
     assert not (out / "traces.collecting").exists() and not (out / "traces.previous").exists()
 
 
+def test_collect_publish_failure_restores_the_previous_run(tmp_path: Path, monkeypatch):
+    cfg = config()
+    agent = {"name": "claude-code", "model_name": "anthropic/claude-x"}
+    for i, cell in enumerate(cells(cfg)[:2]):
+        _, result, _ = play(cell, [accept_last] * 10)
+        _fake_trial(tmp_path / "job", f"t{i}", agent, result, f"2026-11-27T00:0{i}:00")
+    out = tmp_path / "run"
+    collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job" / "t0"], out)
+    before = {p.relative_to(out): p.read_bytes() for p in out.rglob("*") if p.is_file()}
+    import parley_sim.adapters.harbor as hb
+
+    def fail(*a, **kw):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(hb.os, "replace", fail)
+    with pytest.raises(OSError):
+        collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], out)
+    after = {p.relative_to(out): p.read_bytes() for p in out.rglob("*")
+             if p.is_file() and not p.name.endswith(".collecting") and "traces.collecting" not in p.parts}
+    assert after == before  # the old manifest still points at its own traces
+
+
+def test_collect_of_nothing_leaves_an_existing_run_alone(tmp_path: Path):
+    cfg = config()
+    _, result, _ = play(cells(cfg)[0], [accept_last] * 10)
+    _fake_trial(tmp_path / "job", "t0", {"name": "claude-code", "model_name": "anthropic/x"}, result,
+                "2026-11-27T00:00:00")
+    out = tmp_path / "run"
+    collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], out)
+    manifest = (out / "manifest.jsonl").read_text()
+    other = config(lineup=[cfg.lineup[0], {**cfg.lineup[1].model_dump(exclude_none=True), "model": "o/m"}])
+    counts = collect_jobs(other.model_dump(), config_hash(other), [tmp_path / "job"], out)
+    assert counts["kept"] == 0 and (out / "manifest.jsonl").read_text() == manifest
+
+
+def test_collect_refuses_two_agents_with_the_same_focal_name(tmp_path: Path):
+    cfg = config()
+    for i, model in enumerate(["org/model", "org-model"]):
+        _, result, _ = play(cells(cfg)[i], [accept_last] * 10)
+        _fake_trial(tmp_path / "job", f"t{i}", {"name": "claude-code", "model_name": model}, result,
+                    f"2026-11-27T00:0{i}:00")
+    with pytest.raises(ValueError, match="both become the focal model"):
+        collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], tmp_path / "run")
+
+
 def _meeting_cells(**kw):
     cfg = load_config(ROOT / "configs" / "meeting-canary.yaml")
     chash = config_hash(cfg)
@@ -688,3 +735,39 @@ def test_collect_counts_chat_leaks_in_simulated_user_trials(tmp_path: Path):
     assert counts["kept"] == 1 and counts["chat_replies"] == 2 and counts["chat_leaks"] == 1
     row = [json.loads(l) for l in (tmp_path / "run" / "manifest.jsonl").read_text().splitlines()][1]
     assert row["chat"] == {"replies": replies, "leaks": 1}
+
+
+def test_an_environment_error_on_a_tool_move_ends_the_episode_cleanly():
+    soc = next(c for c in cells(config()) if c.arm == "soc")
+    rt = HarborRuntime(RuntimeConfig(cell=soc, token=TOKEN))
+    asyncio.run(rt.start())
+
+    def broken(*a, **kw):
+        raise RuntimeError("environment bug")
+
+    rt.episode.env.apply = broken
+    move = {"message": "hi", "move": PROPOSE, "explanation": "x"}
+    first = asyncio.run(rt.take_turn(move))
+    again = asyncio.run(rt.take_turn(move))  # not a stale pending request
+    assert "ended early" in first and "ended early" in again
+    assert rt.pending is None and rt.result()["completed"] == 0
+
+
+def test_chat_leaks_are_counted_for_unfinished_trials_too(tmp_path: Path):
+    from parley_sim.envs import meeting as mt
+
+    cfg, hc = _meeting_cells()
+    cell = next(c for c in hc if c.arm == "soc")
+    rt = HarborRuntime(RuntimeConfig(cell=cell, token=TOKEN))
+    asyncio.run(rt.start())
+    best, value = max(rt.episode.state.inst.free[mt.ASSISTANT].items(), key=lambda kv: kv[1])
+    asyncio.run(rt.take_turn({"message": "Hi", "move": {"type": "propose", "slot": best}}))
+    result = rt.result()  # the episode is not over
+    assert result["completed"] == 0
+    _fake_trial(tmp_path / "job", "t0", {"name": "claude-code", "model_name": "anthropic/x"}, result,
+                "2026-11-27T00:00:00")
+    (tmp_path / "job" / "t0" / "agent").mkdir()
+    (tmp_path / "job" / "t0" / "agent" / "bridge-trajectory.json").write_text(
+        json.dumps(_bridge_export([f"{best} is worth {value:g} to me."])))
+    counts = collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], tmp_path / "run")
+    assert counts["chat_replies"] == 1 and counts["chat_leaks"] == 1

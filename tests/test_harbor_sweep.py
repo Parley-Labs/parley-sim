@@ -11,15 +11,16 @@ from parley_sim.cli import main
 
 
 def _trial(root: Path, name: str, *, task: str, persona: str | None, reward: float | None,
-           agent: str = "claude-code", model: str = "anthropic/claude-sonnet-5-5") -> None:
+           agent: str = "claude-code", model: str = "anthropic/claude-sonnet-5-5",
+           user_model: str = "anthropic/claude-haiku-5-5", reward_name: str = "reward") -> None:
     t = root / name
     t.mkdir(parents=True)
     (t / "config.json").write_text(json.dumps({
         "task": {"path": f"tasks/{task}"},
         "agent": {"name": agent, "model_name": model},
-        "user_agent": {"name": "claude-code", "model_name": "anthropic/claude-haiku-5-5",
+        "user_agent": {"name": "claude-code", "model_name": user_model,
                        "user_persona_path": persona}}))
-    rewards = None if reward is None else {"reward": reward}
+    rewards = None if reward is None else {reward_name: reward}
     (t / "result.json").write_text(json.dumps({
         "task_name": task, "verifier_result": None if rewards is None else {"rewards": rewards},
         "exception_info": None if reward is not None else {"exception_type": "AgentTimeoutError"}}))
@@ -106,3 +107,28 @@ def test_personas_from_a_panel(tmp_path: Path):
     assert meta["interaction_style"] == "confrontational"
     with pytest.raises(ValueError):
         hs.write_personas(panel, tmp_path / "out2", 5)
+
+
+def test_a_requested_reward_key_is_not_replaced_by_another(tmp_path: Path):
+    _trial(tmp_path, "t0", task="a", persona=None, reward=0.8, reward_name="score")
+    assert hs.collect([tmp_path])[0]["reward"] == 0.8  # default key: a lone reward is used
+    assert hs.collect([tmp_path], reward_key="completed")[0]["reward"] is None
+
+
+def test_user_models_are_not_compared_as_personas(tmp_path: Path):
+    for i in range(3):
+        _trial(tmp_path, f"d{i}", task=f"t{i}", persona=None, reward=1.0)
+        _trial(tmp_path, f"m{i}", task=f"t{i}", persona="minimal.md", reward=0.0,
+               user_model="other/model")
+    groups = hs.sweep_report(hs.collect([tmp_path]))["groups"]
+    assert len(groups) == 2 and all(g["comparisons"] == [] for g in groups)
+    assert "simulated user claude-code / other/model" in hs.render_sweep({"baseline": "harbor-default",
+                                                                          "margin": None, "groups": groups})
+
+
+def test_arm_mean_is_the_mean_of_task_means(tmp_path: Path):
+    for i in range(10):
+        _trial(tmp_path, f"a{i}", task="a", persona=None, reward=1.0)
+    _trial(tmp_path, "b0", task="b", persona=None, reward=0.0)
+    arm = hs.sweep_report(hs.collect([tmp_path]))["groups"][0]["arms"]["harbor-default"]
+    assert arm["mean"] == 0.5 and arm["trials"] == 11 and arm["tasks"] == 2

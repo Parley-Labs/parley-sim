@@ -281,14 +281,18 @@ class HarborRuntime:
             # Any interruption, including a cancelled tool call, ends the
             # episode as errored: the focal request it held has already been
             # consumed, so it must not stay pending.
-            if episode.result is None:
-                episode.abort(repr(exc))
-            self.error = repr(exc)[:500]
-            self.pending = None
+            self._abort(exc)
             if not isinstance(exc, Exception):
                 raise
             event = episode.result
         self.pending = event if isinstance(event, DecisionRequest) else None
+
+    def _abort(self, exc: BaseException) -> None:
+        episode = self.episode
+        if episode is not None and episode.result is None:
+            episode.abort(repr(exc))
+        self.error = repr(exc)[:500]
+        self.pending = None
 
     def _prompt(self, seat: Seat | None = None) -> str:
         seat = seat or self.config.cell.focal_seat
@@ -323,7 +327,12 @@ class HarborRuntime:
         async with self._lock:
             if self.episode is None:
                 self.episode = self._build()
-                await self._advance(self.episode.advance())
+                try:
+                    first = self.episode.advance()
+                except Exception as exc:  # the environment failed to start the episode
+                    self._abort(exc)
+                else:
+                    await self._advance(first)
             episode = self.episode
             if episode.result is not None:
                 return self._for(seat, self._prompt(seat))
@@ -360,7 +369,11 @@ class HarborRuntime:
                 return self._for(seat, why + self._prompt(seat))
             result = self._focal_result(req, action,
                                         source="harbor-user" if seat in self.external else "harbor")
-            event = episode.advance(result)
+            try:
+                event = episode.advance(result)
+            except Exception as exc:  # the environment failed; illegal moves are strikes, not this
+                self._abort(exc)
+                return self._for(seat, self._prompt(seat))
             self.pending = None  # consumed; _advance sets the next one
             decision = next(l for l in reversed(episode.lines) if l["type"] == "decision"
                             and l["seat"] == seat)
@@ -721,7 +734,7 @@ _CA_LINES = ("COPY extra-ca.crt /usr/local/share/ca-certificates/extra-ca.crt\n"
 
 def export_task(out: Path, cell: HarborCell, *, chash: str, wheel: Path | None = None,
                 image: str | None = None, dataset: str = "parley-labs/parley-sim",
-                agent_timeout: float = 1800.0, seed_secret: str | None = None,
+                agent_timeout: float = 1800.0, seed_secret_env: str | None = None,
                 extra_ca: Path | None = None) -> Path:
     """Write one Harbor task directory and return it. The sidecar is either
     built from `wheel` or pulled as a prebuilt `image`. `extra_ca` adds a CA
@@ -760,8 +773,13 @@ def export_task(out: Path, cell: HarborCell, *, chash: str, wheel: Path | None =
         source = f"    image: {image}"
     keys = sorted({k for m in specs if (k := key_env(m))})
     extra_env = "".join(f'      {k}: "${{{k}:-}}"\n' for k in keys)
-    if seed_secret:
-        extra_env += f'      PARLEY_SEED_SECRET: "{seed_secret}"\n'
+    if seed_secret_env:
+        # Passed through from the shell that runs the tasks, as model keys are:
+        # the secret's value is never written into a task.
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", seed_secret_env):
+            raise ValueError(f"not an environment variable name: {seed_secret_env!r}")
+        extra_env += (f'      PARLEY_SEED_SECRET: "${{{seed_secret_env}:?set {seed_secret_env} '
+                      'to the seed secret}"\n')
     volumes = ""
     if persona:
         extra_env += f'      PARLEY_PERSONA_FILE: "{PERSONA_PATH}"\n'
@@ -836,6 +854,7 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
     counts = {"trials": 0, "kept": 0, "duplicates": 0, "other_config": 0, "no_config_hash": 0}
     persona_digest = None
     copies: list[tuple[Path, str]] = []  # written only once every trial has been checked
+    slugs: dict[str, tuple[Any, Any]] = {}  # focal model name -> (agent, model) it stands for
     for trial in trials:
         counts["trials"] += 1
         result = json.loads((trial / "verifier" / "result.json").read_text())
@@ -856,7 +875,12 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
                 raise ValueError(f"{trial} used a different persona panel from earlier trials of "
                                  f"this config; collect each panel's jobs separately")
             persona_digest = digest_here
-        focal = _focal_name(trial_config.get("agent") or {})
+        agent = trial_config.get("agent") or {}
+        identity = (agent.get("name") or agent.get("import_path"), agent.get("model_name"))
+        focal = _focal_name(agent)
+        if slugs.setdefault(focal, identity) != identity:
+            raise ValueError(f"agents {slugs[focal]} and {identity} both become the focal model "
+                             f"{focal!r}; collect their jobs separately")
         key = (cell["seed"], focal, cell["arm"], cell["replicate"])
         if key in rows:
             counts["duplicates"] += 1
@@ -865,7 +889,8 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
         cell_key = f"{run_id}-{cell['seed']}-{focal}-{cell['arm']}-r{cell['replicate']}"
         trace_rel = f"traces/{cell_key}.jsonl"
         done = bool(result.get("completed") and result.get("verified"))
-        lines = read_trace(trial / "verifier" / "trace.jsonl") if done else []
+        trace_path = trial / "verifier" / "trace.jsonl"
+        lines = read_trace(trace_path) if done else []
         if done:
             copies.append((trial / "verifier" / "trace.jsonl", trace_rel))
         rows[key] = {"type": "cell", "cell_key": cell_key,
@@ -880,7 +905,11 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
         if replies is not None:  # a simulated-user trial: the agent's chat reached the other side
             leak = envs.get(config["env"], allow_import=True).chat_leak
             seat = cell.get("focal_seat")
-            leaks = sum(leak(lines, seat, t) for t in replies) if leak and lines and seat else None
+            # The agent's private information is in its observations, which an
+            # unfinished trial's saved trace has too.
+            seen = lines or (read_trace(trace_path) if trace_path.exists() else [])
+            usable = any(l.get("type") == "decision" and l.get("seat") == seat for l in seen)
+            leaks = sum(leak(seen, seat, t) for t in replies) if leak and seat and usable else None
             rows[key]["chat"] = {"replies": replies, "leaks": leaks}
             counts["chat_replies"] = counts.get("chat_replies", 0) + len(replies)
             if leaks is not None:
@@ -893,7 +922,8 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
            "source": "harbor"}
     if persona_digest:
         run["persona_digest"] = persona_digest
-    _write_run(out, [run, *rows.values()], copies)
+    if rows:  # an empty collection (e.g. the wrong config) leaves an existing run alone
+        _write_run(out, [run, *rows.values()], copies)
     return counts
 
 
@@ -935,9 +965,18 @@ def _write_run(out: Path, rows: list[dict[str, Any]], copies: list[tuple[Path, s
     with tmp.open("w", encoding="utf-8") as f:
         for row in rows:
             f.write(json.dumps(row, sort_keys=True) + "\n")
-    if (out / "traces").exists():
-        (out / "traces").rename(old)
-    staging.rename(out / "traces")
-    os.replace(tmp, out / "manifest.jsonl")
+    traces = out / "traces"
+    if traces.exists():
+        traces.rename(old)
+    try:
+        staging.rename(traces)
+        os.replace(tmp, out / "manifest.jsonl")
+    except BaseException:
+        # Put the previous traces back under the previous manifest.
+        if old.exists():
+            if traces.exists():
+                traces.rename(staging)
+            old.rename(traces)
+        raise
     if old.exists():
         shutil.rmtree(old)

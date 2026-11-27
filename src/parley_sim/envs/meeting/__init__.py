@@ -53,6 +53,10 @@ class State:
     end_reason: str | None = None  # accepted | gave_up | deadline
 
 
+MAX_BUSY = 0.75  # above this, four mutual free hours become rare
+_MAX_DRAWS = 1000
+
+
 def _mutual(inst: Instance) -> list[str]:
     return [s for s in SLOTS if s in inst.free[ASSISTANT] and s in inst.free[CONTACT]]
 
@@ -68,11 +72,15 @@ class MeetingScheduling:
         the contact's value is pulled toward the opposite of the assistant's."""
         r = random.Random(seed)
         busy = float(config.get("busy", 0.5))
-        while True:
+        if not 0.0 <= busy <= MAX_BUSY:
+            raise ValueError(f"busy must be between 0 and {MAX_BUSY}, not {busy}")
+        for _ in range(_MAX_DRAWS):
             free_a = [s for s in SLOTS if r.random() >= busy]
             free_c = [s for s in SLOTS if r.random() >= busy]
             if len(set(free_a) & set(free_c)) >= 4:
                 break
+        else:
+            raise ValueError(f"seed {seed}: no calendars with four mutual free hours at busy={busy}")
         va = {s: r.randint(1, 10) for s in free_a}
         vc = {}
         for s in free_c:

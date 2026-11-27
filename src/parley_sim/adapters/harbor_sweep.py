@@ -119,8 +119,8 @@ def collect(job_dirs: list[str | Path], reward_key: str = "reward") -> list[dict
             result = json.loads(result_path.read_text())
             rewards = (result.get("verifier_result") or {}).get("rewards") or {}
             reward = rewards.get(reward_key)
-            if reward is None and len(rewards) == 1:
-                reward = next(iter(rewards.values()))
+            if reward is None and reward_key == "reward" and len(rewards) == 1:
+                reward = next(iter(rewards.values()))  # a task with one, differently named reward
             arm, seed = arm_of(user.get("user_persona_path"))
             agent = config.get("agent") or {}
             task = config.get("task") or {}
@@ -136,14 +136,18 @@ def collect(job_dirs: list[str | Path], reward_key: str = "reward") -> list[dict
 
 def sweep_report(rows: list[dict[str, Any]], baseline: str = DEFAULT_ARM,
                  margin: float | None = None) -> dict[str, Any]:
-    """Per agent and model: each arm's mean reward, and every other arm against
-    `baseline` on the tasks both ran. A trial without a reward counts as 0
-    (Harbor's convention for a failed run) and is reported."""
-    groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    """Per agent, model, user agent and user model: each arm's mean reward
+    (the mean of its per-task means), and every other arm against `baseline`
+    on the tasks both ran. Only the persona differs within a group, so a
+    different user agent or user model is never compared as a persona. A trial
+    without a reward counts as 0 (Harbor's convention for a failed run) and is
+    reported."""
+    groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for r in rows:
-        groups[(r["agent"], r["model"])].append(r)
+        groups[(r["agent"], r["model"], r["user_agent"], r["user_model"])].append(r)
     out: dict[str, Any] = {"baseline": baseline, "margin": margin, "groups": []}
-    for (agent, model), rs in sorted(groups.items(), key=lambda kv: (str(kv[0][0]), str(kv[0][1]))):
+    for (agent, model, user_agent, user_model), rs in sorted(
+            groups.items(), key=lambda kv: tuple(str(x) for x in kv[0])):
         by_task: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
         missing: dict[str, int] = defaultdict(int)
         for r in rs:
@@ -152,7 +156,7 @@ def sweep_report(rows: list[dict[str, Any]], baseline: str = DEFAULT_ARM,
         arms = sorted(by_task, key=lambda a: (a != baseline, a))
         summary = {a: {"tasks": len(by_task[a]), "trials": sum(map(len, by_task[a].values())),
                        "no_reward": missing[a],
-                       "mean": statistics.fmean(v for vs in by_task[a].values() for v in vs)}
+                       "mean": statistics.fmean(statistics.fmean(vs) for vs in by_task[a].values())}
                    for a in arms}
         comparisons = []
         for arm in arms:
@@ -170,7 +174,8 @@ def sweep_report(rows: list[dict[str, Any]], baseline: str = DEFAULT_ARM,
             _, p = _paired_permutation_p(pairs, statistics.fmean)
             comparisons.append({"arm": arm, "tasks": len(tasks), "delta": point, "ci95": ci95,
                                 "ci90": ci90, "p": p, "verdict": _verdict(point, ci95, ci90, margin)})
-        out["groups"].append({"agent": agent, "model": model, "arms": summary,
+        out["groups"].append({"agent": agent, "model": model, "user_agent": user_agent,
+                              "user_model": user_model, "arms": summary,
                               "comparisons": comparisons})
     return out
 
@@ -197,10 +202,12 @@ def render_sweep(report: dict[str, Any]) -> str:
 
     lines = ["# Persona sweep", "",
              f"Baseline arm: {report['baseline']}. Matched unit: the task (each arm's "
-             "reward averaged over its trials of a task). "
+             "reward averaged over its trials of a task; an arm's mean is the mean of its "
+             "task means). "
              + (f"Margin: {report['margin']}." if report["margin"] is not None else "No margin.")]
     for g in report["groups"]:
-        lines += ["", f"## {g['agent']} / {g['model']}", "",
+        lines += ["", f"## {g['agent']} / {g['model']}, simulated user {g['user_agent']} / "
+                  f"{g['user_model']}", "",
                   "| arm | tasks | trials | no reward | mean reward |", "|---|---|---|---|---|"]
         for arm, s in g["arms"].items():
             lines.append(f"| {arm} | {s['tasks']} | {s['trials']} | {s['no_reward']} | {s['mean']:.3f} |")

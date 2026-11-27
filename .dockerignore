@@ -3,6 +3,8 @@
 **/__pycache__
 **/.pytest_cache
 runs
+tasks
+jobs
 **/*.parquet
 **/.env
 dist

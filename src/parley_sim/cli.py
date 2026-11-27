@@ -204,12 +204,10 @@ def cmd_harbor_export(args: argparse.Namespace) -> int:
     if wheel is not None and (not wheel.is_file() or wheel.suffix != ".whl"):
         print(f"--wheel {wheel}: not a wheel file (build one with `uv build --wheel`)", file=sys.stderr)
         return 2
-    secret = None
-    if args.seed_secret_env:
-        secret = os.environ.get(args.seed_secret_env)
-        if not secret:
-            print(f"{args.seed_secret_env} is not set", file=sys.stderr)
-            return 2
+    if args.seed_secret_env and not os.environ.get(args.seed_secret_env):
+        print(f"{args.seed_secret_env} is not set (it must also be set when running the tasks)",
+              file=sys.stderr)
+        return 2
     try:
         cells = harbor_cells(build_grid(cfg), run_id=cfg.run_id, env=cfg.env,
                              env_config=cfg.env_config, lineup=cfg.lineup,
@@ -222,7 +220,8 @@ def cmd_harbor_export(args: argparse.Namespace) -> int:
     chash = config_hash(cfg)
     for cell in cells:
         export_task(Path(args.out), cell, chash=chash, wheel=wheel, image=args.image,
-                    seed_secret=secret, extra_ca=Path(args.extra_ca) if args.extra_ca else None)
+                    seed_secret_env=args.seed_secret_env,
+                    extra_ca=Path(args.extra_ca) if args.extra_ca else None)
     print(f"{len(cells)} tasks in {args.out}")
     return 0
 
@@ -333,7 +332,8 @@ def main(argv: list[str] | None = None) -> int:
     h.add_argument("--harbor-user-replicates", type=int, default=1, metavar="N",
                    help="tasks per seed in the --harbor-user-arm arm (default 1)")
     h.add_argument("--seed-secret-env", help="environment variable holding a seed secret, for "
-                   "private exports: scenarios can't then be computed from the seed")
+                   "private exports: scenarios can't then be computed from the seed. The value "
+                   "is not written into the tasks; set the variable when running them too")
     h.add_argument("--extra-ca", help="CA certificate to trust inside the images (local builds "
                    "behind a TLS-intercepting proxy; don't use for tasks you publish)")
     h.set_defaults(func=cmd_harbor_export)

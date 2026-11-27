@@ -187,6 +187,8 @@ Counterpart token use is counted; the agent's own usage is in Harbor's results.
   never sees the seed, but a published task names it. For a private
   evaluation, export with `--seed-secret-env VAR` (the same secret for every
   task, so arms stay matched): scenarios then can't be computed from the seed.
+  The secret is not written into the tasks; set `VAR` in the shell that runs
+  them, as for model keys.
 - **Prompts.** The agent sees the same role, rules and observations as a
   model seat, but answers through `take_turn` instead of a JSON reply, so
   Harbor results compare agents with each other, not with local runs.
