@@ -1,0 +1,76 @@
+# PRE-REGISTERED ANALYSIS PLAN: committed before any episode of this run exists.
+#
+# Question: when the agent under test is a full agent harness run in Harbor,
+# does the kind of simulated customer change the agent's measured outcome?
+# (a) Does conditioning an LLM customer on a NeMo UserSim persona change it,
+# relative to a plain LLM customer? (b) Do LLM customers change it relative to
+# scripted customers? This repeats equiv-sd3 with agent harnesses instead of
+# bare model calls.
+#
+# Data: fresh seeds 1100-1139 only (never used by any earlier run). The 6-task
+# harbor-live check (seeds 1060-1062) was a pipeline test and is NOT pooled.
+#
+# Agents (each is a focal model in the report): Harbor's claude-code and
+# terminus-2, both on anthropic/claude-sonnet-5-5. The `harbor-agent` lineup
+# entry below is a placeholder that harbor-export ignores.
+# Arms: soc = three scripted customers (rotation as in a local run); aoc =
+# plain Claude Sonnet 5.5 customer; usersim = the same model conditioned on a
+# UserSim persona (en_US panel of 200 personas from `usersim panel`, recorded
+# by digest; the panel is never published). aoc and usersim: 2 replicates.
+# Tasks: 40 seeds x (1 + 2 + 2) = 200 per agent, 400 trials.
+#
+# Commands (exactly):
+#   parley-sim harbor-export configs/harbor-pilot.yaml --out TASKS --image IMAGE
+#   harbor run -p TASKS -a claude-code -m anthropic/claude-sonnet-5-5 -o JOBS
+#   harbor run -p TASKS -a terminus-2  -m anthropic/claude-sonnet-5-5 -o JOBS
+#   parley-sim harbor-collect JOBS --config configs/harbor-pilot.yaml --out RUN
+#   parley-sim report RUN --margins focal_surplus_share=0.08,turns=0.8 --verdict-rule margin
+# Tasks whose image build fails before the episode starts are re-run; no trial
+# that reached the verifier is re-run or dropped (harbor-collect keeps the
+# earliest per task and agent).
+#
+# Verdict rule: margin (replicates averaged per seed; "different" needs a 95%
+# CI excluding 0 and |delta| >= margin; "equivalent" needs the 90% CI inside
+# +/-margin). Margins as equiv-sd3: focal_surplus_share 0.08, turns 0.8.
+#
+# H1 (persona equivalence), per agent, "aoc vs usersim": focal_surplus_share
+#   and turns both equivalent.
+# H2 (scripted vs LLM customers), per agent, "aoc vs soc" on
+#   focal_surplus_share: different, with the agent scoring higher against the
+#   LLM customer (the direction seen in equiv-sd3).
+# Report every verdict, including inconclusive ones. No other comparison or
+#   metric is confirmatory; everything else in the report is exploratory.
+run_id: harbor-pilot
+env: support_desk
+seeds: 1100:1140
+lineup:
+- name: harbor-agent
+  provider: scripted
+  model: agent_scripted
+- name: sonnet-customer
+  provider: anthropic
+  model: claude-sonnet-5-5
+  api_key_env: PARLEY_ANTHROPIC_API_KEY
+  effort: low
+  max_tokens: 8192
+- name: sonnet-customer-usersim
+  provider: anthropic
+  model: claude-sonnet-5-5
+  api_key_env: PARLEY_ANTHROPIC_API_KEY
+  effort: low
+  max_tokens: 8192
+  persona: usersim
+focal_models:
+- harbor-agent
+scripted_counterparts:
+- hardliner
+- reasonable
+- conceder
+adaptive_counterparts:
+- sonnet-customer
+extra_arms:
+  usersim:
+  - sonnet-customer-usersim
+persona_file: ~/.cache/parley-sim/usersim-en_US.parquet
+self_null_replicates: 1
+max_refusals: 3
