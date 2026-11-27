@@ -1,0 +1,12 @@
+# Offline check of the meeting_scheduling environment: scripted seats only,
+# no keys. Swap the lineup for real models to make the counterpart adaptive.
+#   uv run parley-sim matched configs/meeting-canary.yaml --out runs/meeting-canary
+run_id: meeting-canary
+env: meeting_scheduling
+seeds: 0:12
+lineup:
+- {name: assistant, provider: scripted, model: assistant_scripted}
+- {name: bot-contact, provider: scripted, model: accommodating}
+focal_models: [assistant]
+scripted_counterparts: [accommodating, picky, stubborn]
+adaptive_counterparts: [bot-contact]
