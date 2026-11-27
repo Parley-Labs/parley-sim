@@ -46,7 +46,7 @@ import os
 import re
 import secrets
 import shutil
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -101,6 +101,7 @@ class HarborCell:
     env_config: dict[str, Any] = field(default_factory=dict)
     lineup: list[dict[str, Any]] = field(default_factory=list)  # specs of the model seats
     reward_metric: str = "focal_surplus_share"
+    config_hash: str | None = None  # of the config the task was exported from; set by export_task
 
     @property
     def name(self) -> str:
@@ -181,7 +182,10 @@ class HarborRuntime:
     def __init__(self, config: RuntimeConfig, client_factory=build_client):
         self.config = config
         cell = config.cell
-        self.entry = envs.get(cell.env)
+        # The environment the task was exported with: the operator's own config
+        # (an import path like `pkg.envs:ENTRY` is imported, as `matched` does),
+        # not a name read from a trace or result.
+        self.entry = envs.get(cell.env, allow_import=True)
         self.text = self.entry.text()
         self.lineup = {m["name"]: ModelSpec(**m) for m in cell.lineup}
         self.personas: list[dict[str, Any]] | None = None
@@ -303,8 +307,8 @@ class HarborRuntime:
         the focal seat's own view: no counterpart decisions or private values."""
         cell = self.config.cell
         out: dict[str, Any] = {
-            "cell": {"run_id": cell.run_id, "seed": cell.seed, "arm": cell.arm,
-                     "replicate": cell.replicate, "seats": cell.seats},
+            "cell": {"run_id": cell.run_id, "config_hash": cell.config_hash, "seed": cell.seed,
+                     "arm": cell.arm, "replicate": cell.replicate, "seats": cell.seats},
             "persona_digest": digest(self.personas) if self.personas is not None else None,
             "completed": 0, "errored": 0, "reward": 0.0, "verified": 0,
             "problems": [], "metrics": {}, "trace": []}
@@ -566,6 +570,7 @@ def export_task(out: Path, cell: HarborCell, *, chash: str, wheel: Path | None =
     leave it unset for tasks you publish."""
     if (wheel is None) == (image is None):
         raise ValueError("give exactly one of wheel or image")
+    cell = replace(cell, config_hash=chash)
     task = out / cell.name
     if task.exists():
         shutil.rmtree(task)
@@ -643,8 +648,9 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
     """Gather finished Harbor trials of tasks exported from a matched config
     (`config`: its model_dump, `chash`: its config_hash) into a run directory
     for `parley-sim report`. Each Harbor agent and model becomes a focal model.
-    Only one trial per (task, agent) is kept: the earliest. Counterpart usage
-    is counted; the agent's own usage is in Harbor's results."""
+    Only trials of tasks exported from this exact config (same config hash)
+    are used; then one trial per (task, agent) is kept, the earliest.
+    Counterpart usage is counted; the agent's own usage is in Harbor's results."""
     run_id = config["run_id"]
     out.mkdir(parents=True, exist_ok=True)
     (out / "traces").mkdir(exist_ok=True)
@@ -653,14 +659,19 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
                     if (t / "result.json").exists() else "")
     rows: dict[tuple[int, str, str, int], dict[str, Any]] = {}
     focals: dict[str, dict[str, Any]] = {}
-    counts = {"trials": 0, "kept": 0, "duplicates": 0, "other_config": 0}
+    counts = {"trials": 0, "kept": 0, "duplicates": 0, "other_config": 0, "no_config_hash": 0}
     persona_digest = None
     for trial in trials:
         counts["trials"] += 1
         result = json.loads((trial / "verifier" / "result.json").read_text())
         trial_config = json.loads((trial / "config.json").read_text())
         cell = result.get("cell") or {}
-        if cell.get("run_id") != run_id:
+        # Checked before deduplication, so a trial of another config can never
+        # stand in for (or crowd out) one of this config's.
+        if not cell.get("config_hash"):
+            counts["no_config_hash"] += 1  # exported before the hash was recorded
+            continue
+        if cell["config_hash"] != chash or cell.get("run_id") != run_id:
             counts["other_config"] += 1
             continue
         focal = _focal_name(trial_config.get("agent") or {})

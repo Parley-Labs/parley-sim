@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -61,8 +62,11 @@ def config(**kw) -> MatchedConfig:
 
 
 def cells(cfg: MatchedConfig) -> list[HarborCell]:
-    return harbor_cells(build_grid(cfg), run_id=cfg.run_id, env=cfg.env, env_config=cfg.env_config,
-                        lineup=cfg.lineup)
+    """The config's cells as export_task writes them (stamped with its hash)."""
+    chash = config_hash(cfg)
+    return [replace(c, config_hash=chash)
+            for c in harbor_cells(build_grid(cfg), run_id=cfg.run_id, env=cfg.env,
+                                  env_config=cfg.env_config, lineup=cfg.lineup)]
 
 
 def play(cell: HarborCell, moves, client=None):
@@ -251,7 +255,7 @@ def test_collect_builds_a_run_that_report_reads(tmp_path: Path):
     _, again, _ = play(cells(cfg)[0], [accept_last] * 10)
     _fake_trial(job, "dup", agents[0], again, "2026-11-26T01:00:00")
     counts = collect_jobs(cfg.model_dump(), config_hash(cfg), [job], tmp_path / "run")
-    assert counts == {"trials": 19, "kept": 18, "duplicates": 1, "other_config": 0}
+    assert counts == {"trials": 19, "kept": 18, "duplicates": 1, "other_config": 0, "no_config_hash": 0}
     manifest = [json.loads(l) for l in (tmp_path / "run" / "manifest.jsonl").read_text().splitlines()]
     assert manifest[0]["config"]["focal_models"] == ["claude-code.anthropic-claude-x",
                                                      "terminus-2.openrouter-some-model"]
@@ -347,3 +351,46 @@ def test_oracle_plays_any_env_to_the_end(tmp_path: Path):
     result = rt.result()
     assert result["completed"] == 1 and result["verified"] == 1
     assert all(l.get("strike") is None for l in result["trace"] if l["type"] == "decision")
+
+
+def test_collect_rejects_trials_of_another_config(tmp_path: Path):
+    """Same run_id, different counterpart model: the old trial must not be
+    collected under the new config, before or instead of its own trials."""
+    old = config()
+    new = config(lineup=[old.lineup[0], {**old.lineup[1].model_dump(exclude_none=True),
+                                          "model": "other/model"}])
+    assert old.run_id == new.run_id and config_hash(old) != config_hash(new)
+    agent = {"name": "claude-code", "model_name": "anthropic/claude-x"}
+    task = export_task(tmp_path / "tasks", cells(old)[0], chash=config_hash(old), wheel=_wheel(tmp_path))
+    stamped = HarborCell.decode(
+        (task / "environment" / "docker-compose.yaml").read_text().split('PARLEY_CELL: "')[1].split('"')[0])
+    assert stamped.config_hash == config_hash(old)
+    _, result, _ = play(stamped, [accept_last] * 10)
+    assert result["cell"]["config_hash"] == config_hash(old)
+    _fake_trial(tmp_path / "job", "old", agent, result, "2026-11-27T00:00:00")
+    counts = collect_jobs(new.model_dump(), config_hash(new), [tmp_path / "job"], tmp_path / "run")
+    assert counts["kept"] == 0 and counts["other_config"] == 1
+    counts = collect_jobs(old.model_dump(), config_hash(old), [tmp_path / "job"], tmp_path / "run2")
+    assert counts["kept"] == 1
+    # A trial from before the hash was recorded is not collected either.
+    _, legacy, _ = play(replace(cells(old)[1], config_hash=None), [accept_last] * 10)
+    _fake_trial(tmp_path / "job2", "legacy", agent, legacy, "2026-11-27T00:00:00")
+    counts = collect_jobs(old.model_dump(), config_hash(old), [tmp_path / "job2"], tmp_path / "run3")
+    assert counts["kept"] == 0 and counts["no_config_hash"] == 1
+
+
+def test_sidecar_loads_an_env_named_by_import_path(monkeypatch):
+    """A fresh sidecar process has nothing registered: the cell's import path
+    (here the haggle example) must be imported, not rejected."""
+    from parley_sim import envs as envs_mod
+
+    examples = ROOT / "examples"
+    monkeypatch.syspath_prepend(str(examples))
+    cfg = load_config(examples / "haggle.yaml")
+    cell = next(c for c in harbor_cells(build_grid(cfg), run_id=cfg.run_id, env=cfg.env,
+                                        env_config=cfg.env_config, lineup=cfg.lineup)
+                if c.arm == "soc")
+    monkeypatch.setattr(envs_mod, "_registered", {})  # as in a new process
+    rt = HarborRuntime(RuntimeConfig(cell=HarborCell.decode(cell.encode()), token=TOKEN))
+    text = asyncio.run(rt.start())
+    assert "take_turn" in text
