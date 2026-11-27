@@ -833,3 +833,10 @@ def test_collect_recovers_from_an_interrupted_publish(tmp_path: Path):
     (out / "manifest.jsonl.collecting").write_text("{}\n")
     _recover_run(out)
     assert sorted(p.name for p in (out / "traces").iterdir()) == traces
+    # Through collect itself, when that collection keeps nothing (another config).
+    (out / "traces").rename(out / "traces.previous")
+    (out / "manifest.jsonl.collecting").write_text("{}\n")
+    other = config(lineup=[cfg.lineup[0], {**cfg.lineup[1].model_dump(exclude_none=True), "model": "o/m"}])
+    assert collect_jobs(other.model_dump(), config_hash(other), [tmp_path / "job"], out)["kept"] == 0
+    assert sorted(p.name for p in (out / "traces").iterdir()) == traces
+    assert (out / "manifest.jsonl").read_text() == manifest

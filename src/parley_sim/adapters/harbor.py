@@ -872,6 +872,8 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
     are used; then one trial per (task, agent) is kept, the earliest.
     Counterpart usage is counted; the agent's own usage is in Harbor's results."""
     run_id = config["run_id"]
+    if out.is_dir():
+        _recover_run(out)  # first, even if this collection then writes nothing
     trials = sorted({p.parent.parent for d in job_dirs for p in Path(d).rglob("verifier/result.json")},
                     key=lambda t: (json.loads((t / "result.json").read_text()).get("started_at") or "")
                     if (t / "result.json").exists() else "")
