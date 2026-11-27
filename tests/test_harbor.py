@@ -536,3 +536,86 @@ def test_failed_collect_leaves_the_previous_run_intact(tmp_path: Path):
     assert collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "good" / "t0"], out)["kept"] == 1
     assert len(list((out / "traces").glob("*.jsonl"))) == 1 and (out / "notes.txt").exists()
     assert not (out / "traces.collecting").exists() and not (out / "traces.previous").exists()
+
+
+def _meeting_cells(**kw):
+    cfg = load_config(ROOT / "configs" / "meeting-canary.yaml")
+    chash = config_hash(cfg)
+    return cfg, [replace(c, config_hash=chash)
+                 for c in harbor_cells(build_grid(cfg), run_id=cfg.run_id, env=cfg.env,
+                                       env_config=cfg.env_config, lineup=cfg.lineup, **kw)]
+
+
+def test_external_arm_cells():
+    _, hc = _meeting_cells(external_arm="harbor-user", external_replicates=2)
+    ext = [c for c in hc if c.arm == "harbor-user"]
+    assert len(ext) == 12 * 2 and {c.replicate for c in ext} == {0, 1}
+    assert all(c.seats == {"contact": "external:harbor-user"} and c.lineup == [] for c in ext)
+    with pytest.raises(ValueError, match="already exists"):
+        _meeting_cells(external_arm="soc")
+
+
+def test_counterpart_played_from_outside_through_tools():
+    """Both seats are played through tools, alternating, as Harbor's user
+    agent (counterpart) and the agent under test would."""
+    from parley_sim.envs import meeting as mt
+
+    _, hc = _meeting_cells(external_arm="harbor-user")
+    cell = next(c for c in hc if c.arm == "harbor-user")
+    cp_token = "c" * 24
+    with pytest.raises(ValueError, match="PARLEY_COUNTERPART_TOKEN"):
+        HarborRuntime(RuntimeConfig(cell=cell, token=TOKEN))
+    rt = HarborRuntime(RuntimeConfig(cell=cell, token=TOKEN, counterpart_token=cp_token))
+    app = create_runtime_app(rt)
+
+    async def go():
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://parley-runtime:8000") as c:
+                async def tool(name, **args):
+                    r = await c.post("/mcp", headers=HEADERS, json={
+                        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {"name": name, "arguments": args}})
+                    res = r.json()["result"]
+                    return res.get("isError", False), res["content"][0]["text"]
+
+                err, text = await tool("counterpart_start", token="wrong" * 5)
+                assert err and "not for you" in text
+                _, agent_view = await tool("start_episode")
+                assert "assistant" in agent_view and "other side's turn" in agent_view
+                _, cp_view = await tool("counterpart_start", token=cp_token)
+                assert "counterpart_take_turn" in cp_view
+                inst = rt.episode.state.inst
+                mutual = sorted(set(inst.free[mt.ASSISTANT]) & set(inst.free[mt.CONTACT]))
+                _, out = await tool("counterpart_take_turn", token=cp_token, action={
+                    "message": "Can we meet?", "move": {"type": "propose", "slot": mutual[0]}})
+                assert "other side's turn" in out
+                # Out of turn, the counterpart's move is not taken.
+                _, out = await tool("counterpart_take_turn", token=cp_token, action={
+                    "message": "again", "move": {"type": "none"}})
+                assert "other side's turn" in out
+                _, out = await tool("take_turn", action={"message": "Sure.", "move": {"type": "accept"}})
+                assert "episode is over" in out
+                forbidden = (await c.get("/result")).status_code
+                return forbidden, (await c.get("/result", headers={"x-parley-token": TOKEN})).json()
+
+    forbidden, result = asyncio.run(go())
+    assert forbidden == 403
+    assert result["completed"] == 1 and result["verified"] == 1 and result["no_deal"] == 0
+    sources = [(l["seat"], l["raw"]["source"]) for l in result["trace"] if l["type"] == "decision"]
+    assert sources == [("contact", "harbor-user"), ("assistant", "harbor")]
+
+
+def test_export_of_an_external_arm(tmp_path: Path):
+    cfg, hc = _meeting_cells(external_arm="harbor-user")
+    cell = next(c for c in hc if c.arm == "harbor-user")
+    task = export_task(tmp_path, cell, chash=config_hash(cfg), wheel=_wheel(tmp_path))
+    instruction = (task / "instruction.md").read_text()
+    compose = (task / "environment" / "docker-compose.yaml").read_text()
+    cp_token = instruction.split('token "')[1].split('"')[0]
+    assert f'PARLEY_COUNTERPART_TOKEN: "{cp_token}"' in compose
+    assert "counterpart_start" in instruction and "`contact` seat" in instruction
+    # The result token stays out of the instruction (the counterparty must not read the score).
+    toml = (task / "task.toml").read_text()
+    result_token = toml.split('PARLEY_RESULT_TOKEN = "')[1].split('"')[0]
+    assert result_token not in instruction

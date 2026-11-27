@@ -119,11 +119,14 @@ class HarborCell:
 
 
 def harbor_cells(grid: list[Any], *, run_id: str, env: str, env_config: dict[str, Any],
-                 lineup: list[ModelSpec], reward_metric: str = "focal_surplus_share") -> list[HarborCell]:
+                 lineup: list[ModelSpec], reward_metric: str = "focal_surplus_share",
+                 external_arm: str | None = None, external_replicates: int = 1) -> list[HarborCell]:
     """A matched grid without its focal model: one cell per (seed, arm,
     replicate), counterparts seated as a local run would seat them. `grid` is
     `parley_sim.matched.build_grid(cfg)`; the cells of its first focal model
-    are used."""
+    are used. `external_arm` adds an arm on the same seeds whose counterpart
+    seats are played from outside (by Harbor's simulated user) through the
+    counterpart tools."""
     kinds = envs.get(env, allow_import=True).metric_kinds
     if reward_metric not in kinds:
         raise ValueError(f"reward metric {reward_metric!r} is not one of {sorted(kinds)}")
@@ -141,6 +144,17 @@ def harbor_cells(grid: list[Any], *, run_id: str, env: str, env_config: dict[str
                               env_config=dict(env_config),
                               lineup=[specs[n].model_dump(exclude_none=True) for n in members],
                               reward_metric=reward_metric))
+    if external_arm:
+        if external_arm in {c.arm for c in out}:
+            raise ValueError(f"arm {external_arm!r} already exists in the config")
+        seen: set[int] = set()
+        for c in [c for c in out if c.arm == "soc"]:
+            if c.seed in seen:
+                continue
+            seen.add(c.seed)
+            for r in range(external_replicates):
+                out.append(replace(c, arm=external_arm, replicate=r, lineup=[],
+                                   seats={s: f"{EXTERNAL}{external_arm}" for s in c.seats}))
     return out
 
 
@@ -166,6 +180,7 @@ class RuntimeConfig:
     token: str
     seed_secret: str | None = None
     persona_file: str | None = None
+    counterpart_token: str | None = None  # for seats played from outside (external:...)
 
     @classmethod
     def from_env(cls, environ: dict[str, str] | None = None) -> RuntimeConfig:
@@ -175,12 +190,20 @@ class RuntimeConfig:
             raise ValueError("PARLEY_RESULT_TOKEN must be set (16+ characters)")
         return cls(cell=HarborCell.decode(e["PARLEY_CELL"]), token=token,
                    seed_secret=e.get("PARLEY_SEED_SECRET") or None,
-                   persona_file=e.get("PARLEY_PERSONA_FILE") or None)
+                   persona_file=e.get("PARLEY_PERSONA_FILE") or None,
+                   counterpart_token=e.get("PARLEY_COUNTERPART_TOKEN") or None)
+
+
+EXTERNAL = "external:"  # seat label prefix: played from outside, through the counterpart tools
+TOOL_CP_START = "counterpart_start"
+TOOL_CP_TURN = "counterpart_take_turn"
 
 
 class HarborRuntime:
-    """One episode, played by the agent through MCP. Calls are serialised:
-    the episode has one pending focal decision at a time."""
+    """One episode, played through MCP by the agent and, for seats labelled
+    `external:...`, by an outside counterparty (Harbor's simulated user).
+    Calls are serialised; the episode has one pending decision at a time.
+    Model and scripted counterparts are played inside the sidecar."""
 
     def __init__(self, config: RuntimeConfig, client_factory=build_client):
         self.config = config
@@ -201,11 +224,15 @@ class HarborRuntime:
         for spec in self.lineup.values():  # fail at startup, not at the agent's first call
             if spec.provider != "scripted":
                 self.clients[spec.name] = client_factory(spec)
+        self.external = {s for s, label in cell.seats.items() if label.startswith(EXTERNAL)}
+        if self.external and len(config.counterpart_token or "") < 16:
+            raise ValueError("a seat played from outside needs PARLEY_COUNTERPART_TOKEN (16+ characters)")
+        self.players = {cell.focal_seat, *self.external}  # seats played through tools
         self.breaker = Breaker(3)
         self.episode: Episode | None = None
         self.counterparts: dict[Seat, ModelSeat | ScriptedSeat] = {}
         self.pending: DecisionRequest | None = None
-        self.last_strike: str | None = None
+        self.last_strike: dict[Seat, str | None] = {}
         self.error: str | None = None
         self._lock = asyncio.Lock()
 
@@ -236,11 +263,12 @@ class HarborRuntime:
         return Episode(self.entry.env(), spec, policies)
 
     async def _advance(self, event: DecisionRequest | EpisodeComplete) -> None:
-        """Play counterpart turns until the focal seat must act or the episode ends."""
+        """Play in-sidecar counterpart turns until a tool-played seat must act
+        or the episode ends."""
         episode = self.episode
         assert episode is not None
         try:
-            while isinstance(event, DecisionRequest) and event.seat != self.config.cell.focal_seat:
+            while isinstance(event, DecisionRequest) and event.seat not in self.players:
                 event = episode.advance(await self.counterparts[event.seat].decide(event))
         except BaseException as exc:
             # Any interruption, including a cancelled tool call, ends the
@@ -255,39 +283,47 @@ class HarborRuntime:
             event = episode.result
         self.pending = event if isinstance(event, DecisionRequest) else None
 
-    def _prompt(self) -> str:
+    def _prompt(self, seat: Seat | None = None) -> str:
+        seat = seat or self.config.cell.focal_seat
+        start, turn = (TOOL_START, TOOL_TURN) if seat not in self.external else (TOOL_CP_START, TOOL_CP_TURN)
         episode = self.episode
         if episode is None:
-            return f"Call {TOOL_START} first."
+            return f"Call {start} first."
         if self.pending is None:
             if self.error is not None:
                 return ("The episode ended early: a counterpart could not continue. "
                         "Do not call any more tools.")
-            score = (episode.result.outcomes or {}).get(self.config.cell.focal_seat) \
-                if episode.result else None
+            score = (episode.result.outcomes or {}).get(seat) if episode.result else None
             return ("The episode is over."
                     + (f" Your score (value of the outcome to you): {score:g}." if score is not None else "")
                     + " Do not call any more tools.")
+        if self.pending.seat != seat:
+            return (f"It is the other side's turn. Wait until they have replied, then call "
+                    f"`{start}` to see what they did.")
         _, user = self.text.render(self.pending.observation)
-        user = _JSON_REPLY.sub("", user) + f"\n\nTake your turn with `{TOOL_TURN}`."
-
-        note = (f"Your previous turn could not be used ({self.last_strike}); "
-                "no move was made for it.\n\n" if self.last_strike else "")
+        user = _JSON_REPLY.sub("", user) + f"\n\nTake your turn with `{turn}`."
+        strike = self.last_strike.get(seat)
+        note = (f"Your previous turn could not be used ({strike}); "
+                "no move was made for it.\n\n" if strike else "")
         return note + user
 
-    async def start(self) -> str:
+    async def start(self, seat: Seat | None = None) -> str:
+        """The seat's role, rules and private information, and where the
+        episode stands. The first call by either side starts the episode."""
+        seat = seat or self.config.cell.focal_seat
         async with self._lock:
-            if self.episode is not None:
-                return "The episode has already started. Current state:\n\n" + self._prompt()
-            self.episode = self._build()
-            await self._advance(self.episode.advance())
-            if self.pending is None:
-                return self._prompt()
-            system, _ = self.text.render(self.pending.observation)
-            return f"{system}\n\n{self._prompt()}"
+            if self.episode is None:
+                self.episode = self._build()
+                await self._advance(self.episode.advance())
+            episode = self.episode
+            if episode.result is not None:
+                return self._prompt(seat)
+            system, _ = self.text.render(episode.env.observe(episode.state, seat))
+            return f"{system}\n\n{self._prompt(seat)}"
 
-    def _focal_result(self, req: DecisionRequest, submitted: JSON) -> DecisionResult:
-        raw: JSON = {"source": "harbor", "payload": submitted}
+    def _focal_result(self, req: DecisionRequest, submitted: JSON,
+                      source: str = "harbor") -> DecisionResult:
+        raw: JSON = {"source": source, "payload": submitted}
         try:
             if len(json.dumps(submitted)) > MAX_ACTION_CHARS:
                 raise MalformedOutput(f"turn is longer than {MAX_ACTION_CHARS} characters")
@@ -298,19 +334,31 @@ class HarborRuntime:
                                   detail=detail[:500], raw=raw)
         return DecisionResult(req.request_id, parsed, explanation=explanation, raw=raw)
 
-    async def take_turn(self, action: Any) -> str:
+    async def take_turn(self, action: Any, seat: Seat | None = None) -> str:
+        seat = seat or self.config.cell.focal_seat
         async with self._lock:
             episode, req = self.episode, self.pending
-            if episode is None or req is None:
-                return self._prompt()
-            result = self._focal_result(req, action)
+            if episode is None or req is None or req.seat != seat:
+                return self._prompt(seat)
+            result = self._focal_result(req, action,
+                                        source="harbor-user" if seat in self.external else "harbor")
             event = episode.advance(result)
             self.pending = None  # consumed; _advance sets the next one
             decision = next(l for l in reversed(episode.lines) if l["type"] == "decision"
-                            and l["seat"] == self.config.cell.focal_seat)
-            self.last_strike = decision["strike"]
+                            and l["seat"] == seat)
+            self.last_strike[seat] = decision["strike"]
             await self._advance(event)
-            return self._prompt()
+            return self._prompt(seat)
+
+    def check_counterpart_token(self, token: str) -> None:
+        if not self.external or not hmac.compare_digest(
+                token.encode(), (self.config.counterpart_token or "").encode()):
+            raise PermissionError("these tools are for the other side of the episode, not for you")
+
+    def counterpart_seat(self) -> Seat:
+        if len(self.external) != 1:
+            raise ValueError("exactly one seat must be played from outside")
+        return next(iter(self.external))
 
     def result(self) -> dict[str, Any]:
         """The scored outcome, for the verifier only. Mid-episode the trace is
@@ -411,6 +459,26 @@ def create_runtime_app(runtime: HarborRuntime) -> Any:
         "Take your turn: one action matching this JSON schema: " + json.dumps(tool_schema or schema)
         + ". Returns what happens next, or the end of the episode."))(take_turn)
 
+    if runtime.external:
+        async def counterpart_start(token: str) -> str:
+            runtime.check_counterpart_token(token)
+            return await runtime.start(runtime.counterpart_seat())
+
+        async def counterpart_take_turn(token: str, action: dict[str, Any]) -> str:
+            runtime.check_counterpart_token(token)
+            return await runtime.take_turn(action, runtime.counterpart_seat())
+
+        if tool_schema is not None:
+            counterpart_take_turn.__annotations__["action"] = Annotated[
+                dict[str, Any], Field(json_schema_extra=tool_schema)]
+        note = " For the other side of the episode only: needs its token."
+        mcp.tool(name=TOOL_CP_START, description=(
+            "Start or check the episode as the other side: your role, rules, private "
+            "information and where things stand." + note))(counterpart_start)
+        mcp.tool(name=TOOL_CP_TURN, description=(
+            "Take the other side's turn: one action matching this JSON schema: "
+            + json.dumps(tool_schema or schema) + "." + note))(counterpart_take_turn)
+
     @mcp.custom_route("/health", methods=["GET"])
     async def health(request: Request) -> PlainTextResponse:
         return PlainTextResponse("ok")
@@ -444,6 +512,24 @@ Use the MCP tools on the `{RUNTIME_SERVICE}` server:
 
 How you are scored is described by `{TOOL_START}`. There are no files to write;
 the episode itself is graded.
+"""
+
+COUNTERPART_INSTRUCTION = """\
+You are playing one side of an interactive episode, the `{seat}` seat, against an
+AI assistant who plays the `{focal}` seat. The assistant cannot see this message.
+
+1. Call `{cp_start}` on the `{service}` MCP server with token "{token}". It tells you
+   your role, the rules, your private information and what has happened so far.
+   Keep your private information to yourself unless you choose to share it.
+2. When it is your turn, call `{cp_turn}` with the same token and one action. The
+   `message` in your action is what the assistant sees from you.
+3. After each of your turns, prompt the assistant through your bridge with a short
+   note, for example: "I've replied. Use your {service} tools: `{start}` to see where
+   things stand, then `{turn}`." In your first prompt, also tell them they are the
+   `{focal}` in this episode and should start by calling `{start}`.
+4. Repeat until a tool says the episode is over, then stop.
+
+Play your role as a real person in it would: pursue the goals it describes.
 """
 
 TASK_TOML = """\
@@ -655,7 +741,17 @@ def export_task(out: Path, cell: HarborCell, *, chash: str, wheel: Path | None =
                arm=cell.arm, replicate=cell.replicate, config_hash=chash, token=token,
                agent_timeout=agent_timeout, service=RUNTIME_SERVICE, port=RUNTIME_PORT,
                source=source, cell=cell.encode(), extra_env=extra_env, volumes=volumes, ca=ca)
-    (task / "instruction.md").write_text(INSTRUCTION)
+    external = sorted(s for s, label in cell.seats.items() if label.startswith(EXTERNAL))
+    if len(external) > 1:
+        raise ValueError("only one seat can be played from outside")
+    if external:
+        cp_token = secrets.token_urlsafe(24)
+        fmt["extra_env"] += f'      PARLEY_COUNTERPART_TOKEN: "{cp_token}"\n'
+        (task / "instruction.md").write_text(COUNTERPART_INSTRUCTION.format(
+            seat=external[0], focal=cell.focal_seat, token=cp_token, service=RUNTIME_SERVICE,
+            cp_start=TOOL_CP_START, cp_turn=TOOL_CP_TURN, start=TOOL_START, turn=TOOL_TURN))
+    else:
+        (task / "instruction.md").write_text(INSTRUCTION)
     (task / "task.toml").write_text(TASK_TOML.format(**fmt))
     (task / "environment" / "docker-compose.yaml").write_text(COMPOSE.format(**fmt))
     (task / "environment" / "Dockerfile").write_text(MAIN_DOCKERFILE.format(**fmt))

@@ -81,6 +81,45 @@ harbor run -p tasks -a claude-code -m anthropic/claude-sonnet-5 -n 4 -o jobs
   answered, which can take up to twice each counterpart's `timeout_s`. Agents
   whose MCP client times out sooner need a longer tool timeout.
 
+## Harbor's simulated user as the counterpart (experimental)
+
+Instead of a counterpart inside the sidecar, Harbor's own simulated user can
+play the counterpart seat. Any Harbor agent can then be the counterparty, with
+Harbor's `--user-persona-path` setting its personality, while the environment
+still enforces the rules and scores the outcome exactly.
+
+```bash
+parley-sim harbor-export configs/meeting-canary.yaml --out tasks --image parley-runtime \
+  --harbor-user-arm harbor-user
+```
+
+This adds an arm, `harbor-user`, on the same seeds. Its tasks differ in three ways:
+
+- Their `instruction.md` is the counterparty's brief. In a simulated-user
+  trial Harbor gives the instruction to the user agent only, never to the
+  agent under test.
+- The sidecar also serves `counterpart_start` and `counterpart_take_turn`.
+  They need a per-task counterparty token, which only that brief contains.
+- Both sides act only through their tools, so every move and message is in the
+  trace. The bridge is used only to tell the agent under test it's their turn.
+
+Run those tasks with a simulated user that can reach the sidecar, using a job
+config:
+
+```yaml
+user_agent:
+  name: claude-code
+  model_name: anthropic/claude-haiku-5-5
+  bridge: {kind: acp}
+  mcp_servers:
+    - {name: parley-runtime, transport: streamable-http, url: http://parley-runtime:8000/mcp}
+```
+
+Caveats: not yet run with real agents. Harbor's bridge supports only some
+agents under test (Claude Code, Codex, Gemini CLI, OpenCode, Copilot CLI). The
+two agents share one container, so the counterparty token is a guard against
+mistakes, not a security boundary.
+
 ## Report
 
 ```bash

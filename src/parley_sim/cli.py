@@ -213,7 +213,9 @@ def cmd_harbor_export(args: argparse.Namespace) -> int:
     try:
         cells = harbor_cells(build_grid(cfg), run_id=cfg.run_id, env=cfg.env,
                              env_config=cfg.env_config, lineup=cfg.lineup,
-                             reward_metric=args.reward_metric)
+                             reward_metric=args.reward_metric,
+                             external_arm=args.harbor_user_arm,
+                             external_replicates=args.harbor_user_replicates)
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2
@@ -325,6 +327,11 @@ def main(argv: list[str] | None = None) -> int:
     src.add_argument("--image", help="prebuilt runtime sidecar image (see integrations/harbor)")
     h.add_argument("--reward-metric", default="focal_surplus_share",
                    help="episode metric Harbor records as the reward (default: focal_surplus_share)")
+    h.add_argument("--harbor-user-arm", metavar="ARM",
+                   help="also export an arm whose counterpart is played by Harbor's simulated user "
+                        "(run with --user-agent); its tasks' instruction is the counterpart's brief")
+    h.add_argument("--harbor-user-replicates", type=int, default=1, metavar="N",
+                   help="tasks per seed in the --harbor-user-arm arm (default 1)")
     h.add_argument("--seed-secret-env", help="environment variable holding a seed secret, for "
                    "private exports: scenarios can't then be computed from the seed")
     h.add_argument("--extra-ca", help="CA certificate to trust inside the images (local builds "
