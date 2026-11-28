@@ -36,6 +36,10 @@ gym = [
 openenv = [
     "openenv>=0.12,<0.14",
 ]
+harbor = [
+    "mcp>=1.30,<2",
+    "uvicorn>=0.30",
+]
 
 [project.scripts]
 parley-sim = "parley_sim.cli:main"

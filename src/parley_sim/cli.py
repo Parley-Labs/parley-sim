@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import tempfile
 from collections import Counter
@@ -186,6 +187,60 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return 1 if bad else 0
 
 
+def cmd_harbor_export(args: argparse.Namespace) -> int:
+    """Experimental: write Harbor tasks, one per cell of a matched config's grid."""
+    try:
+        from parley_sim.adapters.harbor import export_task, harbor_cells
+    except ImportError as exc:
+        print(f"harbor-export needs the harbor extra: {exc}", file=sys.stderr)
+        return 2
+    from parley_sim.matched import build_grid, config_hash
+
+    cfg = load_config(args.config)
+    if (args.wheel is None) == (args.image is None):
+        print("give exactly one of --wheel or --image", file=sys.stderr)
+        return 2
+    wheel = Path(args.wheel) if args.wheel else None
+    if wheel is not None and (not wheel.is_file() or wheel.suffix != ".whl"):
+        print(f"--wheel {wheel}: not a wheel file (build one with `uv build --wheel`)", file=sys.stderr)
+        return 2
+    secret = None
+    if args.seed_secret_env:
+        secret = os.environ.get(args.seed_secret_env)
+        if not secret:
+            print(f"{args.seed_secret_env} is not set", file=sys.stderr)
+            return 2
+    try:
+        cells = harbor_cells(build_grid(cfg), run_id=cfg.run_id, env=cfg.env,
+                             env_config=cfg.env_config, lineup=cfg.lineup,
+                             reward_metric=args.reward_metric)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    chash = config_hash(cfg)
+    for cell in cells:
+        export_task(Path(args.out), cell, chash=chash, wheel=wheel, image=args.image,
+                    seed_secret=secret, extra_ca=Path(args.extra_ca) if args.extra_ca else None)
+    print(f"{len(cells)} tasks in {args.out}")
+    return 0
+
+
+def cmd_harbor_collect(args: argparse.Namespace) -> int:
+    """Experimental: gather Harbor trials into a run directory for `report`."""
+    from parley_sim.adapters.harbor import collect_jobs
+    from parley_sim.matched import config_hash
+
+    cfg = load_config(args.config)
+    try:
+        counts = collect_jobs(cfg.model_dump(), config_hash(cfg), [Path(d) for d in args.jobs],
+                              Path(args.out))
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    print(", ".join(f"{k}: {v}" for k, v in counts.items()))
+    return 0 if counts["kept"] else 1
+
+
 _ENV_HELP = ("environment name or import path (e.g. my_pkg.envs:ENTRY). Needed for an "
              "environment that is not built in, registered or installed: import paths "
              "recorded in traces and manifests are never imported on their own")
@@ -229,6 +284,26 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("traces", nargs="+")
     v.add_argument("--env", help=_ENV_HELP)
     v.set_defaults(func=cmd_verify)
+    h = sub.add_parser("harbor-export",
+                       help="experimental: write Harbor tasks from a matched config (one per cell)")
+    h.add_argument("config", help="matched-run YAML config (its focal_models are not used)")
+    h.add_argument("--out", required=True, help="directory to write task directories into")
+    src = h.add_mutually_exclusive_group(required=True)
+    src.add_argument("--wheel", help="parley-sim wheel the runtime sidecar builds from")
+    src.add_argument("--image", help="prebuilt runtime sidecar image (see integrations/harbor)")
+    h.add_argument("--reward-metric", default="focal_surplus_share",
+                   help="episode metric Harbor records as the reward (default: focal_surplus_share)")
+    h.add_argument("--seed-secret-env", help="environment variable holding a seed secret, for "
+                   "private exports: scenarios can't then be computed from the seed")
+    h.add_argument("--extra-ca", help="CA certificate to trust inside the images (local builds "
+                   "behind a TLS-intercepting proxy; don't use for tasks you publish)")
+    h.set_defaults(func=cmd_harbor_export)
+    hc = sub.add_parser("harbor-collect",
+                        help="experimental: gather Harbor trials into a run directory for report")
+    hc.add_argument("jobs", nargs="+", help="Harbor job or trials directories")
+    hc.add_argument("--config", required=True, help="the config the tasks were exported from")
+    hc.add_argument("--out", required=True, help="run directory to write")
+    hc.set_defaults(func=cmd_harbor_collect)
     args = p.parse_args(argv)
     return args.func(args)
 

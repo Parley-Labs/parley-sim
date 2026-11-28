@@ -20,7 +20,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: uv sync --locked --extra openai --extra anthropic --extra openenv
+      - run: uv sync --locked --extra openai --extra anthropic --extra openenv --extra harbor
       - run: uv run ruff check .
       - run: uv run lint-imports
       - run: uv run pytest -q
@@ -54,4 +54,4 @@ jobs:
           mkdir "$RUNNER_TEMP/sdist"
           tar -xzf dist/*.tar.gz -C "$RUNNER_TEMP/sdist"
           cd "$RUNNER_TEMP"/sdist/parley_sim-*
-          uv run --extra openai --extra anthropic --extra openenv pytest -q
+          uv run --extra openai --extra anthropic --extra openenv --extra harbor pytest -q
