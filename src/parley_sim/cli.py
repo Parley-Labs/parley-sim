@@ -197,8 +197,8 @@ def cmd_harbor_export(args: argparse.Namespace) -> int:
         return 2
     from parley_sim.matched import build_grid, config_hash
 
+    recover_exports(Path(args.out))  # before anything else, so a refused run still repairs one
     cfg = load_config(args.config)
-    recover_exports(Path(args.out))  # before any check, so a refused run still repairs one
     if (args.wheel is None) == (args.image is None):
         print("give exactly one of --wheel or --image", file=sys.stderr)
         return 2

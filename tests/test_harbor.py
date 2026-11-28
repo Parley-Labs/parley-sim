@@ -1030,3 +1030,9 @@ def test_a_refused_export_still_recovers_an_interrupted_swap(tmp_path: Path):
     assert main(["harbor-export", canary, "--out", str(tmp_path / "out"),
                  "--wheel", str(tmp_path / "nope.whl")]) == 2
     assert (task / "task.toml").read_text() == before and not backup.exists()
+    # Even a config that fails to load comes after recovery.
+    task.rename(backup)
+    with pytest.raises(FileNotFoundError):
+        main(["harbor-export", str(tmp_path / "missing.yaml"), "--out", str(tmp_path / "out"),
+              "--image", "x"])
+    assert (task / "task.toml").read_text() == before and not backup.exists()
