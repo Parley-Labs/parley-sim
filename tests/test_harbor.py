@@ -903,12 +903,11 @@ def test_report_refuses_two_agents_that_share_a_focal_name_across_collections(tm
 def test_simulated_users_with_different_persona_texts_are_different(tmp_path: Path):
     from parley_sim.adapters.harbor import _simulated_user
 
-    for d, text in (("a", "terse"), ("b", "chatty")):
+    user = {"name": "claude-code", "model_name": "m", "user_persona_path": "/p/usersim-s00.md"}
+    for d, digest in (("a", "sha256:" + "1" * 64), ("b", "sha256:" + "2" * 64)):
         (tmp_path / d).mkdir()
-        (tmp_path / d / "usersim-s00.md").write_text(text)
-    one, two = (_simulated_user({"name": "claude-code", "model_name": "m",
-                                 "user_persona_path": str(tmp_path / d / "usersim-s00.md")})
-                for d in ("a", "b"))
+        (tmp_path / d / "lock.json").write_text(json.dumps({"user_persona": {"digest": digest}}))
+    one, two = (_simulated_user(user, tmp_path / d) for d in ("a", "b"))
     assert one["persona"] == two["persona"] == "usersim-s00.md" and one != two
 
 
@@ -983,14 +982,14 @@ def test_an_export_interrupted_mid_swap_is_recovered(tmp_path: Path, monkeypatch
 
 
 def test_collect_refuses_a_persona_it_cannot_identify(tmp_path: Path):
-    """Two unreadable persona files with one name would look identical; collect
-    refuses rather than treat possibly different personas as one arm."""
+    """Without Harbor's per-trial persona digest, two personas with one file name
+    would look identical; collect refuses rather than treat them as one arm."""
     cfg, _ = _meeting_cells(external_arm="harbor-user")
     _external_trial(tmp_path / "job", "a", "anthropic/claude-haiku-5-5")
     config = json.loads((tmp_path / "job" / "a" / "config.json").read_text())
     config["user_agent"]["user_persona_path"] = str(tmp_path / "gone" / "usersim-s00.md")
     (tmp_path / "job" / "a" / "config.json").write_text(json.dumps(config))
-    with pytest.raises(ValueError, match="can't read the simulated user's persona file"):
+    with pytest.raises(ValueError, match=r"no persona digest in the trial's lock\.json"):
         collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], tmp_path / "run")
 
 
@@ -1008,8 +1007,9 @@ def test_the_persona_is_identified_as_it_was_when_the_trial_ran(tmp_path: Path):
             {"user_persona": {"path": str(persona), "digest": digest}}))
     one, two = _simulated_user(user, tmp_path / "t1"), _simulated_user(user, tmp_path / "t2")
     assert one["persona_digest"] == "sha256:" + "a" * 64 and one != two
-    # Without a lock (older Harbor), the file as it is now.
-    assert _simulated_user(user, tmp_path)["persona_digest"].startswith("sha256:")
+    # Without a lock, the persona is unidentified (collect then refuses the trial),
+    # even though the file is there: it may have changed since the trial.
+    assert _simulated_user(user, tmp_path)["persona_digest"] is None
 
 
 def test_a_refused_export_still_recovers_an_interrupted_swap(tmp_path: Path):

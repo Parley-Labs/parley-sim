@@ -40,7 +40,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import hashlib
 import hmac
 import json
 import logging
@@ -938,9 +937,9 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
         if any(str(v).startswith(EXTERNAL) for v in (cell.get("seats") or {}).values()):
             counterpart = _simulated_user(trial_config.get("user_agent"), trial)
             if counterpart and counterpart["persona"] and counterpart["persona_digest"] is None:
-                raise ValueError(f"{trial}: can't read the simulated user's persona file "
-                                 f"({trial_config['user_agent'].get('user_persona_path')}), so its "
-                                 "persona can't be identified; collect where the persona files are")
+                raise ValueError(f"{trial}: no persona digest in the trial's lock.json, so the "
+                                 "persona its simulated user played can't be identified (Harbor "
+                                 "0.27 records one when the trial starts)")
             prior = external_arms.setdefault(cell["arm"], counterpart)
             if prior != counterpart:
                 raise ValueError(f"arm {cell['arm']!r} was played by different simulated users "
@@ -1008,18 +1007,14 @@ def _simulated_user(user_agent: dict[str, Any] | None,
                     trial: Path | None = None) -> dict[str, Any] | None:
     """What defines a Harbor simulated user as a counterpart: its agent, model,
     persona and bridge (None for a trial run without one). The persona is
-    identified by content: the digest Harbor recorded in the trial's lock.json
-    when the trial ran, or, for a Harbor that writes none, the file as it is now.
-    The file name is kept for display."""
+    identified by the digest Harbor recorded in the trial's lock.json when the
+    trial ran (None if there is none); the file name is kept for display. The
+    file as it is now is never used: it may have changed since the trial."""
     if not user_agent:
         return None
     bridge = user_agent.get("bridge") or {}
     persona = user_agent.get("user_persona_path")
-    persona_digest = None
-    if persona:
-        persona_digest = _locked_persona_digest(trial)
-        if persona_digest is None and Path(persona).is_file():
-            persona_digest = "sha256:" + hashlib.sha256(Path(persona).read_bytes()).hexdigest()
+    persona_digest = _locked_persona_digest(trial) if persona else None
     return {"agent": user_agent.get("name") or user_agent.get("import_path"),
             "model": user_agent.get("model_name"),
             "persona": Path(persona).name if persona else None,
