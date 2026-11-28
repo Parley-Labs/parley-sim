@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import hmac
 import json
 import logging
@@ -145,8 +146,8 @@ def harbor_cells(grid: list[Any], *, run_id: str, env: str, env_config: dict[str
                               lineup=[specs[n].model_dump(exclude_none=True) for n in members],
                               reward_metric=reward_metric))
     if external_arm:
-        if external_arm in {c.arm for c in out}:
-            raise ValueError(f"arm {external_arm!r} already exists in the config")
+        if external_arm in {c.arm for c in out} | {"soc", "aoc"}:
+            raise ValueError(f"arm {external_arm!r} already exists in the config, or is reserved")
         seen: set[int] = set()
         for c in list(out):  # one per seed, from whichever arms the config runs
             if c.seed in seen:
@@ -759,9 +760,19 @@ def export_task(out: Path, cell: HarborCell, *, chash: str, wheel: Path | None =
     except BaseException:
         shutil.rmtree(task, ignore_errors=True)
         raise
+    backup = out / f".{cell.name}.previous"
+    if backup.exists():
+        shutil.rmtree(backup)
     if final.exists():
-        shutil.rmtree(final)
-    task.rename(final)
+        final.rename(backup)
+    try:
+        task.rename(final)
+    except BaseException:
+        if backup.exists() and not final.exists():
+            backup.rename(final)  # the previous export stays usable
+        raise
+    if backup.exists():
+        shutil.rmtree(backup)
     return final
 
 
@@ -923,7 +934,10 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
         if key in rows:
             counts["duplicates"] += 1
             continue
-        focals[focal] = {"name": focal, "provider": "harbor", "model": focal}
+        # The raw agent and model, so the report can tell two agents apart
+        # whose names map to the same focal name in separate collections.
+        focals[focal] = {"name": focal, "provider": "harbor",
+                         "model": f"{identity[0]}:{identity[1]}" if identity[1] else str(identity[0])}
         cell_key = f"{run_id}-{cell['seed']}-{focal}-{cell['arm']}-r{cell['replicate']}"
         trace_rel = f"traces/{cell_key}.jsonl"
         done = bool(result.get("completed") and result.get("verified"))
@@ -976,9 +990,15 @@ def _simulated_user(user_agent: dict[str, Any] | None) -> dict[str, Any] | None:
         return None
     bridge = user_agent.get("bridge") or {}
     persona = user_agent.get("user_persona_path")
+    # Personas are told apart by content where the file can be read (collect
+    # usually runs where Harbor ran); the file name is kept for display.
+    persona_digest = None
+    if persona and Path(persona).is_file():
+        persona_digest = hashlib.sha256(Path(persona).read_bytes()).hexdigest()[:16]
     return {"agent": user_agent.get("name") or user_agent.get("import_path"),
             "model": user_agent.get("model_name"),
             "persona": Path(persona).name if persona else None,
+            "persona_digest": persona_digest,
             "bridge": bridge.get("kind") if isinstance(bridge, dict) else bridge}
 
 
@@ -1046,10 +1066,12 @@ def _write_run(out: Path, rows: list[dict[str, Any]], copies: list[tuple[Path, s
         traces.rename(old)
     try:
         staging.rename(traces)
-        os.replace(tmp, out / "manifest.jsonl")
+        os.replace(tmp, out / "manifest.jsonl")  # the commit point: it consumes `tmp`
     except BaseException:
-        # Put the previous traces back under the previous manifest.
-        if old.exists():
+        # Put the previous traces back under the previous manifest, unless the
+        # new manifest is already in place (then the new traces belong to it).
+        committed = not tmp.exists()
+        if not committed and old.exists():
             if traces.exists():
                 traces.rename(staging)
             old.rename(traces)

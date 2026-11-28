@@ -129,10 +129,10 @@ def _arm_members(config: dict[str, Any], arm: str) -> list[str]:
 def _arm_definition(config: dict[str, Any], arm: str) -> Any:
     """What fills the counterpart seats in `arm`: policy names for soc, the
     lineup specs of its members for model arms."""
-    if arm == "soc":
-        return list(config["scripted_counterparts"])  # order sets the rotation across seeds
     if arm in (config.get("external_arms") or {}):  # played from outside, e.g. a Harbor simulated user
         return {"external": config["external_arms"][arm]}
+    if arm == "soc":
+        return list(config["scripted_counterparts"])  # order sets the rotation across seeds
     members = (config.get("extra_arms") or {}).get(arm) if arm != "aoc" \
         else config["adaptive_counterparts"]
     lineup = {m["name"]: m for m in config["lineup"]}

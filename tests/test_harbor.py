@@ -869,7 +869,8 @@ def test_collect_records_and_checks_the_simulated_user_of_an_external_arm(tmp_pa
     _external_trial(tmp_path / "job", "a", "anthropic/claude-haiku-5-5")
     counts = collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], tmp_path / "run")
     rows = [json.loads(l) for l in (tmp_path / "run" / "manifest.jsonl").read_text().splitlines()]
-    user = {"agent": "claude-code", "model": "anthropic/claude-haiku-5-5", "persona": None, "bridge": "acp"}
+    user = {"agent": "claude-code", "model": "anthropic/claude-haiku-5-5", "persona": None,
+            "persona_digest": None, "bridge": "acp"}
     assert counts["kept"] == 1 and rows[1]["counterpart"] == user
     assert rows[0]["config"]["external_arms"] == {"harbor-user": user}
     # Same cell and agent, another simulated user model: refused, not deduplicated away.
@@ -886,3 +887,75 @@ def test_report_refuses_one_external_arm_played_by_different_simulated_users(tmp
         collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / j], tmp_path / f"run-{j}")
     with pytest.raises(ValueError, match="arm 'harbor-user' is defined differently"):
         build_report(tmp_path / "run-j1", tmp_path / "run-j2")
+
+
+def test_report_refuses_two_agents_that_share_a_focal_name_across_collections(tmp_path: Path):
+    cfg = config()
+    for i, model in enumerate(["org/model", "org-model"]):
+        _, result, _ = play(cells(cfg)[i], [accept_last] * 10)
+        _fake_trial(tmp_path / f"job{i}", "t", {"name": "claude-code", "model_name": model}, result,
+                    "2026-11-28T00:00:00")
+        collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / f"job{i}"], tmp_path / f"run{i}")
+    with pytest.raises(ValueError, match="configured differently"):
+        build_report(tmp_path / "run0", tmp_path / "run1")
+
+
+def test_simulated_users_with_different_persona_texts_are_different(tmp_path: Path):
+    from parley_sim.adapters.harbor import _simulated_user
+
+    for d, text in (("a", "terse"), ("b", "chatty")):
+        (tmp_path / d).mkdir()
+        (tmp_path / d / "usersim-s00.md").write_text(text)
+    one, two = (_simulated_user({"name": "claude-code", "model_name": "m",
+                                 "user_persona_path": str(tmp_path / d / "usersim-s00.md")})
+                for d in ("a", "b"))
+    assert one["persona"] == two["persona"] == "usersim-s00.md" and one != two
+
+
+def test_reserved_arm_names_cannot_be_played_from_outside():
+    cfg = load_config(ROOT / "configs" / "meeting-canary.yaml").model_copy(update={"run_arms": ["aoc"]})
+    for name in ("soc", "aoc"):
+        with pytest.raises(ValueError, match="reserved"):
+            harbor_cells(build_grid(cfg), run_id=cfg.run_id, env=cfg.env, env_config=cfg.env_config,
+                         lineup=cfg.lineup, external_arm=name)
+
+
+def test_a_failed_task_swap_restores_the_previous_task(tmp_path: Path, monkeypatch):
+    cfg = config()
+    cell = cells(cfg)[0]
+    task = export_task(tmp_path, cell, chash=config_hash(cfg), image="x")
+    before = (task / "task.toml").read_text()
+    real = Path.rename
+
+    def flaky(self, target):
+        if Path(target) == task and self.name.endswith(".exporting"):
+            raise OSError("interrupted")
+        return real(self, target)
+
+    monkeypatch.setattr(Path, "rename", flaky)
+    with pytest.raises(OSError):
+        export_task(tmp_path, cell, chash=config_hash(cfg), image="x")
+    assert (task / "task.toml").read_text() == before
+
+
+def test_an_error_after_the_manifest_commit_keeps_the_new_traces(tmp_path: Path, monkeypatch):
+    import parley_sim.adapters.harbor as hb
+
+    cfg = config()
+    agent = {"name": "claude-code", "model_name": "anthropic/x"}
+    for i, cell in enumerate(cells(cfg)[:2]):
+        _, result, _ = play(cell, [accept_last] * 10)
+        _fake_trial(tmp_path / "job", f"t{i}", agent, result, f"2026-11-28T00:0{i}:00")
+    out = tmp_path / "run"
+    collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job" / "t0"], out)
+    real = hb.os.replace
+
+    def replace_then_fail(src, dst):
+        real(src, dst)
+        raise KeyboardInterrupt  # after the commit point
+
+    monkeypatch.setattr(hb.os, "replace", replace_then_fail)
+    with pytest.raises(KeyboardInterrupt):
+        collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], out)
+    rows = [json.loads(l) for l in (out / "manifest.jsonl").read_text().splitlines()][1:]
+    assert sorted(Path(r["trace"]).name for r in rows) == sorted(p.name for p in (out / "traces").iterdir())

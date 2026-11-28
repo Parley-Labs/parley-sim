@@ -139,7 +139,8 @@ Caveats:
   Harbor 0.27 wrote, so check the counts on a new Harbor version.
 - **One simulated user per arm.** Harbor's `user_agent` settings pick the
   counterparty, outside the config hash. `harbor-collect` records them (agent,
-  model, persona file name, bridge) as the arm's definition and refuses to mix
+  model, persona file name and, where collect can read the file, a digest of
+  its contents, bridge) as the arm's definition and refuses to mix
   trials of one arm played by different simulated users; `report` refuses to
   join runs whose arm of the same name was played differently. To compare
   simulated users, export each as its own arm (`--harbor-user-arm NAME`).
