@@ -1,0 +1,267 @@
+{
+  "run_ids": [
+    "harbor-user-study-harbor"
+  ],
+  "env": "meeting_scheduling",
+  "cells": {
+    "done": 119,
+    "errored": 1
+  },
+  "spend": {
+    "input_tokens": 463532,
+    "output_tokens": 76375,
+    "cost_usd": 0.0
+  },
+  "arms": [
+    "harbor-user",
+    "aoc"
+  ],
+  "kinds": {
+    "deal": "relational",
+    "focal_surplus_share": "relational",
+    "joint_efficiency": "relational",
+    "turns": "relational",
+    "focal_strike_rate": "covariate",
+    "cp_opens_with_offer": "counterpart",
+    "cp_first_offer_share": "counterpart"
+  },
+  "episodes": {
+    "claude-code.anthropic-claude-sonnet-5-5": {
+      "harbor-user": 59,
+      "aoc": 60
+    }
+  },
+  "means": {
+    "claude-code.anthropic-claude-sonnet-5-5": {
+      "harbor-user": {
+        "deal": 1.0,
+        "focal_surplus_share": 0.7346852300242132,
+        "joint_efficiency": 0.9259514496802633,
+        "turns": 6.898305084745763,
+        "focal_strike_rate": 0.0,
+        "cp_opens_with_offer": 1.0,
+        "cp_first_offer_share": 1.0
+      },
+      "aoc": {
+        "deal": 1.0,
+        "focal_surplus_share": 0.799675925925926,
+        "joint_efficiency": 0.9309340659340659,
+        "turns": 7.25,
+        "focal_strike_rate": 0.0,
+        "cp_opens_with_offer": 1.0,
+        "cp_first_offer_share": 0.9888425925925926
+      }
+    }
+  },
+  "noise_floors": {
+    "claude-code.anthropic-claude-sonnet-5-5": {
+      "harbor-user": {
+        "deal": null,
+        "focal_surplus_share": null,
+        "joint_efficiency": null,
+        "turns": null,
+        "focal_strike_rate": null,
+        "cp_opens_with_offer": null,
+        "cp_first_offer_share": null
+      },
+      "aoc": {
+        "deal": null,
+        "focal_surplus_share": null,
+        "joint_efficiency": null,
+        "turns": null,
+        "focal_strike_rate": null,
+        "cp_opens_with_offer": null,
+        "cp_first_offer_share": null
+      }
+    }
+  },
+  "comparisons": {
+    "claude-code.anthropic-claude-sonnet-5-5": {
+      "aoc vs harbor-user": {
+        "deal": {
+          "kind": "relational",
+          "n_pairs": 59,
+          "delta_mean": 0.0,
+          "delta_ci": [
+            0.0,
+            0.0
+          ],
+          "delta_ci90": [
+            0.0,
+            0.0
+          ],
+          "noise_floor": null,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "focal_surplus_share": {
+          "kind": "relational",
+          "n_pairs": 59,
+          "delta_mean": 0.061595372612321765,
+          "delta_ci": [
+            -0.012765671240247502,
+            0.13146354587032552
+          ],
+          "delta_ci90": [
+            -0.002058111380145276,
+            0.12222222222222222
+          ],
+          "noise_floor": null,
+          "margin": 0.08,
+          "clears": false,
+          "verdict": "inconclusive"
+        },
+        "joint_efficiency": {
+          "kind": "relational",
+          "n_pairs": 59,
+          "delta_mean": 0.003812007201837708,
+          "delta_ci": [
+            -0.024802880735084132,
+            0.03284286335133793
+          ],
+          "delta_ci90": [
+            -0.02109331346619483,
+            0.028658347302415104
+          ],
+          "noise_floor": null,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "turns": {
+          "kind": "relational",
+          "n_pairs": 59,
+          "delta_mean": 0.3898305084745763,
+          "delta_ci": [
+            -0.06779661016949153,
+            0.8813559322033898
+          ],
+          "delta_ci90": [
+            0.01694915254237288,
+            0.7796610169491526
+          ],
+          "noise_floor": null,
+          "margin": 0.8,
+          "clears": false,
+          "verdict": "equivalent"
+        },
+        "focal_strike_rate": {
+          "kind": "covariate",
+          "n_pairs": 59,
+          "delta_mean": 0.0,
+          "delta_ci": [
+            0.0,
+            0.0
+          ],
+          "delta_ci90": [
+            0.0,
+            0.0
+          ],
+          "noise_floor": null,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "cp_opens_with_offer": {
+          "kind": "counterpart",
+          "n_pairs": 59,
+          "delta_mean": 0.0,
+          "delta_ci": [
+            0.0,
+            0.0
+          ],
+          "delta_ci90": [
+            0.0,
+            0.0
+          ],
+          "noise_floor": null,
+          "margin": null,
+          "clears": false,
+          "verdict": "-"
+        },
+        "cp_first_offer_share": {
+          "kind": "counterpart",
+          "n_pairs": 59,
+          "delta_mean": -0.01134651600753296,
+          "delta_ci": [
+            -0.020809792843691152,
+            -0.0037664783427495308
+          ],
+          "delta_ci90": [
+            -0.018973634651600752,
+            -0.004001883239171376
+          ],
+          "noise_floor": null,
+          "margin": null,
+          "clears": true,
+          "verdict": "different"
+        }
+      }
+    }
+  },
+  "diversity": {
+    "claude-code.anthropic-claude-sonnet-5-5": {
+      "per_arm": {
+        "harbor-user": {
+          "sd_focal_surplus_share": 0.26113766722699155,
+          "sd_turns": 1.2689245413047316,
+          "sd_cp_first_offer_share": 0.0,
+          "opening_distinct2": 0.18727404193781635,
+          "n_openings": 59
+        },
+        "aoc": {
+          "sd_focal_surplus_share": 0.23269017925006044,
+          "sd_turns": 1.5252118496919298,
+          "sd_cp_first_offer_share": 0.033833703897523014,
+          "opening_distinct2": 0.13619810633648943,
+          "n_openings": 60
+        }
+      },
+      "comparisons": {
+        "aoc vs harbor-user": {
+          "sd_focal_surplus_share": {
+            "delta": -0.027953983820824202,
+            "ci": [
+              -0.08143539812275669,
+              0.025952801953853966
+            ],
+            "n": 59
+          },
+          "sd_turns": {
+            "delta": 0.24025252901317806,
+            "ci": [
+              -0.0460201976550223,
+              0.5022953059055859
+            ],
+            "n": 59
+          },
+          "sd_cp_first_offer_share": {
+            "delta": 0.03409213023364672,
+            "ci": [
+              0.020280091663659787,
+              0.04396706288230033
+            ],
+            "n": 59
+          },
+          "opening_distinct2": {
+            "delta": -0.04865284104826853,
+            "p": 0.004497751124437781,
+            "n": 59
+          }
+        }
+      }
+    }
+  },
+  "margins": {
+    "focal_surplus_share": 0.08,
+    "turns": 0.8
+  },
+  "verdict_rule": "margin",
+  "acceptance_by_offer_quality": {
+    "claude-code.anthropic-claude-sonnet-5-5": {
+      "harbor-user": {},
+      "aoc": {}
+    }
+  }
+}

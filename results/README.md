@@ -15,7 +15,9 @@ Both use seeds 1060 to 1099, so `family-sd4`'s arms join `equiv-sd3`'s in
 A third run, [`harbor-pilot`](#harbor-pilot-pre-registered), repeats the
 `equiv-sd3` question with full agent harnesses (Claude Code and Terminus-2)
 playing the agent through the [Harbor export](../docs/harbor.md), on fresh
-seeds.
+seeds. A fourth, [`harbor-user-study`](#harbor-user-study-pre-registered),
+asks whether Harbor's own simulated user can stand in for a parley-sim model
+counterpart, on the `meeting_scheduling` environment.
 
 **The main metric.** `focal_surplus_share` is the agent's surplus (its value
 for the deal minus its value for no deal) divided by the most surplus it could
@@ -154,6 +156,60 @@ $14.16) and about $9 for the customers, estimated
 from their tokens (the Anthropic API doesn't report cost, so the report's
 `Spend` line shows $0.00).
 
+## harbor-user-study (pre-registered)
+
+The analysis plan is the header of
+[`configs/harbor-user-study.yaml`](../configs/harbor-user-study.yaml),
+committed before any episode existed. Environment: `meeting_scheduling`, an
+assistant booking a meeting with a contact; each side has a private calendar
+and private preferences. Agent: Harbor's `claude-code` on Claude Sonnet 5.5.
+The contact is Claude Haiku 5.5 in both arms, played two ways:
+
+- `aoc`: a direct model call inside the parley-sim sidecar;
+- `harbor-user`: Harbor's simulated user (`claude-code` on Haiku 5.5),
+  prompting the agent over Harbor's ACP bridge and moving through the
+  [counterparty tools](../docs/harbor.md#harbors-simulated-user-as-the-counterpart-experimental).
+
+So the treatment is the whole channel (harness and bridge), not the model.
+Seeds 2100 to 2159, one task per seed and arm: 120 trials, all reached the
+verifier; 119 completed and verified. Verdict rule: margin, margins 0.08
+surplus share and 0.8 turns. Report:
+[`harbor-user-study/report.md`](harbor-user-study/report.md).
+
+| Hypothesis | Result |
+| --- | --- |
+| H1: the two channels give equivalent agent outcomes (surplus share and turns) | **Inconclusive.** Sidecar minus Harbor user, 59 seeds: surplus share +0.062 (90% CI -0.002 to +0.122), whose interval crosses the +0.08 margin; turns +0.39 (+0.02 to +0.78), equivalent |
+
+The agent got 0.800 of the available surplus against the sidecar contact and
+0.735 against Harbor's simulated user. Neither "equivalent" nor "different"
+(the 95% interval, -0.013 to +0.131, includes zero); the study can't say
+whether the channel changes the outcome.
+
+Exploratory, not part of the plan:
+
+- Every completed episode reached a deal in both arms. Joint efficiency
+  barely differs (0.931 against 0.926).
+- One `harbor-user` trial (seed 2107) did not finish: the simulated user
+  started new agent sessions of its own, which had no episode tools, instead
+  of prompting the agent, and the episode stalled. It is kept as errored,
+  as the plan requires.
+- Chat leaks. In this mode everything the agent writes in chat reaches the
+  simulated user, outside the episode; the agent is told so on every turn.
+  28 of its 237 chat replies state one of its private slot ratings as a
+  number, in 21 of the 59 completed trials. Rankings without numbers are
+  not counted. The counter was checked by hand on one trial before the run,
+  not on this one.
+- No `accept` booked a slot other than the one its message named, in either
+  arm.
+- Harbor's simulated user always opened with its own best slot
+  (`cp_first_offer_share`, the contact's value for its first offer as a share
+  of its best, 1.000 against 0.989 for the sidecar contact).
+
+Caveats: one agent model and one contact model, both Claude; one environment;
+Harbor 0.27. Spend: $4.46 (agent $3.90, simulated user $0.35, sidecar
+contact $0.08, two smoke trials outside the run $0.13); the report's `Spend`
+line shows $0.00 because the Anthropic API doesn't report cost.
+
 ## What is and isn't here
 
 | Included | Withheld |
@@ -172,6 +228,8 @@ numbers, because a new panel draws different personas.
 
 For `harbor-pilot`, only the report is published. Its traces include the
 persona arm and agent transcripts and are kept privately with the full run.
+The same holds for `harbor-user-study`, whose manifest also holds the agent's
+chat replies.
 
 `scripts/curate_results.py` made this folder from the full run directories.
 
