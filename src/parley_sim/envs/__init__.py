@@ -20,18 +20,27 @@ class EnvEntry:
     decision_rows: Callable[[Lines], list[dict[str, Any]]]
     claim_rows: Callable[[Lines], list[dict[str, Any]]] | None = None  # for κ validation
     counterpart_opening: Callable[[Lines], str | None] | None = None  # for lexical diversity
+    # Whether chat text outside the episode reveals the seat's private information
+    # (Harbor simulated-user trials, where the agent's chat reaches the other side).
+    chat_leak: Callable[[Lines, Seat, str], bool] | None = None
 
 
 _registered: dict[str, EnvEntry] = {}
 
 
 def _builtin() -> dict[str, EnvEntry]:
+    from parley_sim.envs import meeting as mt
     from parley_sim.envs import support_desk as sd
     from parley_sim.envs.support_desk import metrics as sdm
     return {"support_desk": EnvEntry(sd.SupportDesk, sd.make_policy, sd.SupportDeskText,
                                      sd.AGENT, sdm.episode_metrics, sdm.METRIC_KINDS,
                                      sdm.decision_rows, sdm.claim_rows,
-                                     sdm.counterpart_opening)}
+                                     sdm.counterpart_opening),
+            "meeting_scheduling": EnvEntry(mt.MeetingScheduling, mt.make_policy, mt.MeetingText,
+                                           mt.ASSISTANT, mt.episode_metrics, mt.METRIC_KINDS,
+                                           mt.decision_rows,
+                                           counterpart_opening=mt.counterpart_opening,
+                                           chat_leak=mt.chat_leak)}
 
 
 def register(name: str, entry: EnvEntry) -> None:

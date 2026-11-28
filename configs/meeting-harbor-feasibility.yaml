@@ -1,0 +1,33 @@
+# Feasibility run, not a study: does each contact mode work end to end in
+# Harbor on the meeting_scheduling environment? Too small for results.
+#
+# Agent under test: Harbor's claude-code on anthropic/claude-sonnet-5-5. The
+# `harbor-agent` lineup entry is a placeholder that harbor-export ignores.
+# Arms, on seeds 2000-2005 (6 tasks each, 18 trials):
+#   soc         scripted contacts (accommodating / picky / stubborn rotation)
+#   aoc         Claude Haiku 5.5 contact inside the sidecar
+#   harbor-user Harbor's simulated user (claude-code + Haiku 5.5) plays the
+#               contact through counterpart_start / counterpart_take_turn
+#
+# Commands:
+#   parley-sim harbor-export configs/meeting-harbor-feasibility.yaml --out TASKS \
+#     --image IMAGE --harbor-user-arm harbor-user
+#   harbor run -p TASKS/<soc and aoc tasks> -a claude-code -m anthropic/claude-sonnet-5-5 -o JOBS
+#   harbor run -c JOB.yaml   # harbor-user tasks, user_agent as in docs/harbor.md
+#   parley-sim harbor-collect JOBS --config configs/meeting-harbor-feasibility.yaml --out RUN
+#   parley-sim report RUN
+run_id: meeting-harbor-feasibility
+env: meeting_scheduling
+seeds: 2000:2006
+lineup:
+- {name: harbor-agent, provider: scripted, model: assistant_scripted}
+- name: haiku-contact
+  provider: anthropic
+  model: claude-haiku-5-5
+  api_key_env: PARLEY_ANTHROPIC_API_KEY
+  max_tokens: 4096
+focal_models: [harbor-agent]
+scripted_counterparts: [accommodating, picky, stubborn]
+adaptive_counterparts: [haiku-contact]
+self_null_replicates: 0
+max_refusals: 3

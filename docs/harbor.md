@@ -24,6 +24,8 @@ whatever you run the tasks with.
 - **Sidecar.** A `parley-runtime` service holds the episode and every
   counterpart seat: a scripted policy, a model, or a UserSim persona model. The
   counterparts' private information, models and API keys exist only there.
+  Scripted counterparts are optional: use them for cheap mock runs and as a
+  baseline arm ([concepts](concepts.md#arms)).
 - **Tools.** The agent gets two MCP tools: `start_episode` (role, rules,
   private information, what has happened so far) and `take_turn` (one action;
   its input schema is the environment's action schema). An action that doesn't
@@ -35,7 +37,7 @@ whatever you run the tasks with.
 | key | meaning |
 |---|---|
 | `reward` | The episode metric chosen with `--reward-metric` (default `focal_surplus_share`, as in local runs; negative for a deal below the agent's walk-away). 0 if the episode didn't finish or verify, or the metric is undefined. |
-| `no_deal` | 1 when the episode finished without a deal (its reward is 0). Only for environments with a `deal` metric. |
+| `no_deal` | 1 when the episode finished without a deal (with the default metric, its reward is then 0). Only for environments with a `deal` metric. |
 | `completed` | 1 when the episode reached its end |
 | `verified` | 1 when the trace replays exactly |
 
@@ -81,6 +83,97 @@ harbor run -p tasks -a claude-code -m anthropic/claude-sonnet-5 -n 4 -o jobs
   answered, which can take up to twice each counterpart's `timeout_s`. Agents
   whose MCP client times out sooner need a longer tool timeout.
 
+## Harbor's simulated user as the counterpart (experimental)
+
+Instead of a counterpart inside the sidecar, Harbor's own simulated user can
+play the counterpart seat. Any Harbor agent can then be the counterparty, with
+Harbor's `--user-persona-path` setting its personality, while the environment
+still enforces the rules and scores the outcome exactly.
+
+```bash
+parley-sim harbor-export configs/meeting-canary.yaml --out tasks --image parley-runtime \
+  --harbor-user-arm harbor-user
+```
+
+This adds an arm, `harbor-user`, on the same seeds. Its tasks differ in three ways:
+
+- Their `instruction.md` is the counterparty's brief. In a simulated-user
+  trial Harbor gives the instruction to the user agent only, never to the
+  agent under test.
+- The sidecar also serves `counterpart_start` and `counterpart_take_turn`.
+  They need a per-task counterparty token, which only that brief contains.
+- Both sides act only through their tools, so every move and message is in the
+  trace. The bridge is used only to tell the agent under test it's their turn.
+
+Run those tasks with a simulated user that can reach the sidecar, using a job
+config:
+
+```yaml
+user_agent:
+  name: claude-code
+  model_name: anthropic/claude-haiku-5-5
+  bridge: {kind: acp}
+  mcp_servers:
+    - {name: parley-runtime, transport: streamable-http, url: http://parley-runtime:8000/mcp}
+```
+
+Every tool response to the agent under test says that the chat prompting it is
+the other side, and to reply there only with "Done, your turn." Both sides' turn
+tools say plainly when an action was not recorded (not their turn) or could not
+be used (a strike).
+
+Caveats:
+- **Small runs only so far.** 19 harbor-user trials on `meeting_scheduling`
+  (Claude Code against Claude Code on Haiku 5.5), all completed and verified;
+  turn-taking over the bridge worked in every one. Not yet a study.
+- **Supported agents.** Harbor's bridge supports only some agents under test
+  (Claude Code, Codex, Gemini CLI, OpenCode, Copilot CLI).
+- **Chat leaks.** Harbor sends everything the agent under test writes to the
+  simulated user, and the sidecar never sees it, so chat is not in the trace.
+  `harbor-collect` reads it from Harbor's bridge log
+  (`agent/bridge-trajectory.json`): each simulated-user trial's manifest row
+  gets `chat` (the agent's replies, and how many leak private information when
+  the environment can tell), and the totals are printed. For
+  `meeting_scheduling` a leak is a private slot rating stated as a number.
+  The log format is the ACP client's session export; the parser follows what
+  Harbor 0.27 wrote, so check the counts on a new Harbor version.
+- **One simulated user per arm.** Harbor's `user_agent` settings pick the
+  counterparty, outside the config hash. `harbor-collect` records them (agent,
+  model, persona, bridge) as the arm's definition. The persona is identified by
+  the digest Harbor recorded in each trial's `lock.json` when it ran; a trial
+  without one is refused. It also refuses to
+  mix trials of one arm played by different simulated users, and `report` refuses to
+  join runs whose arm of the same name was played differently. To compare
+  simulated users, export each as its own arm (`--harbor-user-arm NAME`).
+- **Usage figures.** In these trials, Harbor's per-trial usage (`agent_result`)
+  is the simulated user's, not the agent under test's; read the agent's usage
+  from its own logs.
+- **Token.** The two agents share one container, so the counterparty token is
+  a guard against mistakes, not a security boundary.
+
+## Persona sweeps over Harbor's own simulated-user tasks (experimental)
+
+Harbor can run any task with a simulated user (`--user-agent`,
+`--user-persona-path`): the user agent gets the instruction and talks to the
+agent under test, and the task's verifier scores the result. `harbor-sweep`
+runs the same tasks under different personas and asks whether the agent's
+reward changes. The task is the matched unit, as the seed is in a local run.
+
+```bash
+parley-sim harbor-sweep personas --panel PANEL.parquet --n 5 --out personas   # keep private
+parley-sim harbor-sweep plan --tasks TASK... --personas personas --include-default \
+  --agent claude-code --model anthropic/claude-sonnet-5-5 \
+  --user-agent claude-code --user-model anthropic/claude-haiku-5-5 --jobs jobs > sweep.sh
+bash sweep.sh   # runs the trials
+parley-sim harbor-sweep report jobs --baseline harbor-default --margin 0.1
+```
+
+Arms come from persona file names: `harbor-default` (no file), `usersim`
+(`usersim-sNN.md`, from a UserSim panel), `minimal` (a terse user), or any
+`<arm>.md` you write. The files `personas` writes, `minimal.md` included,
+start with the same rules for staying in character. Persona files built from a panel hold persona data; keep
+them out of version control. Not yet run with real agents.
+
 ## Report
 
 ```bash
@@ -103,6 +196,8 @@ Counterpart token use is counted; the agent's own usage is in Harbor's results.
   never sees the seed, but a published task names it. For a private
   evaluation, export with `--seed-secret-env VAR` (the same secret for every
   task, so arms stay matched): scenarios then can't be computed from the seed.
+  The secret is not written into the tasks; set `VAR` in the shell that runs
+  them, as for model keys.
 - **Prompts.** The agent sees the same role, rules and observations as a
   model seat, but answers through `take_turn` instead of a JSON reply, so
   Harbor results compare agents with each other, not with local runs.

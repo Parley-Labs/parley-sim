@@ -12,6 +12,7 @@ httpx = pytest.importorskip("httpx")
 
 from parley_sim import envs  # noqa: E402
 from parley_sim.adapters.harbor import (  # noqa: E402
+    CHAT_NOTE,
     HarborCell,
     HarborRuntime,
     RuntimeConfig,
@@ -224,11 +225,13 @@ def test_export_persona_arm_mounts_the_users_panel(tmp_path: Path):
                  extra_arms={"usersim": ["llm-p"]}, persona_file="panel.parquet")
     cell = next(c for c in cells(cfg) if c.arm == "usersim")
     task = export_task(tmp_path / "out", cell, chash=config_hash(cfg), image="parley-runtime:test",
-                       seed_secret="x" * 32)
+                       seed_secret_env="MY_SEED_SECRET")
     compose = (task / "environment" / "docker-compose.yaml").read_text()
     assert "image: parley-runtime:test" in compose and "build:" not in compose
     assert "${PARLEY_PERSONA_PANEL:?" in compose and "panel.parquet" not in compose
-    assert 'PARLEY_SEED_SECRET: "' + "x" * 32 in compose
+    assert 'PARLEY_SEED_SECRET: "${MY_SEED_SECRET:?' in compose  # passed through, never written
+    with pytest.raises(ValueError, match="not an environment variable"):
+        export_task(tmp_path / "out2", cell, chash=config_hash(cfg), image="x", seed_secret_env='a"b')
     assert not (task / "environment" / "runtime").exists()
 
 
@@ -536,3 +539,500 @@ def test_failed_collect_leaves_the_previous_run_intact(tmp_path: Path):
     assert collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "good" / "t0"], out)["kept"] == 1
     assert len(list((out / "traces").glob("*.jsonl"))) == 1 and (out / "notes.txt").exists()
     assert not (out / "traces.collecting").exists() and not (out / "traces.previous").exists()
+
+
+def test_collect_publish_failure_restores_the_previous_run(tmp_path: Path, monkeypatch):
+    cfg = config()
+    agent = {"name": "claude-code", "model_name": "anthropic/claude-x"}
+    for i, cell in enumerate(cells(cfg)[:2]):
+        _, result, _ = play(cell, [accept_last] * 10)
+        _fake_trial(tmp_path / "job", f"t{i}", agent, result, f"2026-11-27T00:0{i}:00")
+    out = tmp_path / "run"
+    collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job" / "t0"], out)
+    before = {p.relative_to(out): p.read_bytes() for p in out.rglob("*") if p.is_file()}
+    import parley_sim.adapters.harbor as hb
+
+    def fail(*a, **kw):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(hb.os, "replace", fail)
+    with pytest.raises(OSError):
+        collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], out)
+    after = {p.relative_to(out): p.read_bytes() for p in out.rglob("*")
+             if p.is_file() and not p.name.endswith(".collecting") and "traces.collecting" not in p.parts}
+    assert after == before  # the old manifest still points at its own traces
+
+
+def test_collect_of_nothing_leaves_an_existing_run_alone(tmp_path: Path):
+    cfg = config()
+    _, result, _ = play(cells(cfg)[0], [accept_last] * 10)
+    _fake_trial(tmp_path / "job", "t0", {"name": "claude-code", "model_name": "anthropic/x"}, result,
+                "2026-11-27T00:00:00")
+    out = tmp_path / "run"
+    collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], out)
+    manifest = (out / "manifest.jsonl").read_text()
+    other = config(lineup=[cfg.lineup[0], {**cfg.lineup[1].model_dump(exclude_none=True), "model": "o/m"}])
+    counts = collect_jobs(other.model_dump(), config_hash(other), [tmp_path / "job"], out)
+    assert counts["kept"] == 0 and (out / "manifest.jsonl").read_text() == manifest
+
+
+def test_collect_refuses_two_agents_with_the_same_focal_name(tmp_path: Path):
+    cfg = config()
+    for i, model in enumerate(["org/model", "org-model"]):
+        _, result, _ = play(cells(cfg)[i], [accept_last] * 10)
+        _fake_trial(tmp_path / "job", f"t{i}", {"name": "claude-code", "model_name": model}, result,
+                    f"2026-11-27T00:0{i}:00")
+    with pytest.raises(ValueError, match="both become the focal model"):
+        collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], tmp_path / "run")
+
+
+def _meeting_cells(**kw):
+    cfg = load_config(ROOT / "configs" / "meeting-canary.yaml")
+    chash = config_hash(cfg)
+    return cfg, [replace(c, config_hash=chash)
+                 for c in harbor_cells(build_grid(cfg), run_id=cfg.run_id, env=cfg.env,
+                                       env_config=cfg.env_config, lineup=cfg.lineup, **kw)]
+
+
+def test_external_arm_cells():
+    _, hc = _meeting_cells(external_arm="harbor-user", external_replicates=2)
+    ext = [c for c in hc if c.arm == "harbor-user"]
+    assert len(ext) == 12 * 2 and {c.replicate for c in ext} == {0, 1}
+    assert all(c.seats == {"contact": "external:harbor-user"} and c.lineup == [] for c in ext)
+    with pytest.raises(ValueError, match="already exists"):
+        _meeting_cells(external_arm="soc")
+
+
+def test_external_arm_without_the_scripted_arm():
+    cfg = load_config(ROOT / "configs" / "meeting-canary.yaml").model_copy(update={"run_arms": ["aoc"]})
+    hc = harbor_cells(build_grid(cfg), run_id=cfg.run_id, env=cfg.env, env_config=cfg.env_config,
+                      lineup=cfg.lineup, external_arm="harbor-user")
+    ext = [c for c in hc if c.arm == "harbor-user"]
+    assert {c.arm for c in hc} == {"aoc", "harbor-user"}
+    assert sorted(c.seed for c in ext) == sorted({c.seed for c in hc if c.arm == "aoc"})
+    assert all(c.lineup == [] and c.seats == {"contact": "external:harbor-user"} for c in ext)
+
+
+def test_counterpart_played_from_outside_through_tools():
+    """Both seats are played through tools, alternating, as Harbor's user
+    agent (counterpart) and the agent under test would."""
+    from parley_sim.envs import meeting as mt
+
+    _, hc = _meeting_cells(external_arm="harbor-user")
+    cell = next(c for c in hc if c.arm == "harbor-user")
+    cp_token = "c" * 24
+    with pytest.raises(ValueError, match="PARLEY_COUNTERPART_TOKEN"):
+        HarborRuntime(RuntimeConfig(cell=cell, token=TOKEN))
+    rt = HarborRuntime(RuntimeConfig(cell=cell, token=TOKEN, counterpart_token=cp_token))
+    app = create_runtime_app(rt)
+
+    async def go():
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://parley-runtime:8000") as c:
+                async def tool(name, **args):
+                    r = await c.post("/mcp", headers=HEADERS, json={
+                        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {"name": name, "arguments": args}})
+                    res = r.json()["result"]
+                    return res.get("isError", False), res["content"][0]["text"]
+
+                err, text = await tool("counterpart_start", token="wrong" * 5)
+                assert err and "not for you" in text
+                _, agent_view = await tool("start_episode")
+                assert "assistant" in agent_view and "other side's turn" in agent_view
+                assert agent_view.endswith(CHAT_NOTE)  # its chat replies reach the counterparty
+                # Out of turn, the agent is told plainly that nothing was recorded.
+                _, out = await tool("take_turn", action={"message": "Hi", "move": {"type": "none"}})
+                assert out.startswith("Your action was NOT recorded") and out.endswith(CHAT_NOTE)
+                _, cp_view = await tool("counterpart_start", token=cp_token)
+                assert "counterpart_take_turn" in cp_view and CHAT_NOTE not in cp_view
+                # A malformed counterpart action is a strike, and the counterpart is told at once.
+                _, out = await tool("counterpart_take_turn", token=cp_token, action={"move": "x"})
+                assert out.startswith("Your action could not be used") and CHAT_NOTE not in out
+                _, out = await tool("take_turn", action={"message": "Your move.", "move": {"type": "none"}})
+                inst = rt.episode.state.inst
+                mutual = sorted(set(inst.free[mt.ASSISTANT]) & set(inst.free[mt.CONTACT]))
+                _, out = await tool("counterpart_take_turn", token=cp_token, action={
+                    "message": "Can we meet?", "move": {"type": "propose", "slot": mutual[0]}})
+                assert "other side's turn" in out
+                # Out of turn, the counterpart's move is not taken.
+                _, out = await tool("counterpart_take_turn", token=cp_token, action={
+                    "message": "again", "move": {"type": "none"}})
+                assert out.startswith("Your action was NOT recorded")
+                _, out = await tool("take_turn", action={"message": "Sure.", "move": {"type": "accept"}})
+                assert "episode is over" in out
+                forbidden = (await c.get("/result")).status_code
+                return forbidden, (await c.get("/result", headers={"x-parley-token": TOKEN})).json()
+
+    forbidden, result = asyncio.run(go())
+    assert forbidden == 403
+    assert result["completed"] == 1 and result["verified"] == 1 and result["no_deal"] == 0
+    sources = [(l["seat"], l["raw"]["source"]) for l in result["trace"] if l["type"] == "decision"]
+    assert sources == [("contact", "harbor-user"), ("assistant", "harbor")] * 2
+
+
+def test_export_of_an_external_arm(tmp_path: Path):
+    cfg, hc = _meeting_cells(external_arm="harbor-user")
+    cell = next(c for c in hc if c.arm == "harbor-user")
+    task = export_task(tmp_path, cell, chash=config_hash(cfg), wheel=_wheel(tmp_path))
+    instruction = (task / "instruction.md").read_text()
+    compose = (task / "environment" / "docker-compose.yaml").read_text()
+    cp_token = instruction.split('token "')[1].split('"')[0]
+    assert f'PARLEY_COUNTERPART_TOKEN: "{cp_token}"' in compose
+    assert "counterpart_start" in instruction and "`contact` seat" in instruction
+    assert "before prompting the assistant" in instruction
+    assert '"propose"' in instruction  # the action format is inline
+    # The result token stays out of the instruction (the counterparty must not read the score).
+    toml = (task / "task.toml").read_text()
+    result_token = toml.split('PARLEY_RESULT_TOKEN = "')[1].split('"')[0]
+    assert result_token not in instruction
+    assert not (task / "solution").exists()  # the focal-only oracle could not finish these
+
+
+def _bridge_export(replies: list[str]) -> dict:
+    """An ACP session export as Harbor's bridge writes it (abridged)."""
+    messages = []
+    for text in replies:
+        messages.append({"User": {"content": [{"Text": "Your turn. Use your parley-runtime tools."}]}})
+        messages.append({"Agent": {"content": [{"ToolUse": {"name": "take_turn", "raw_input": "{}"}},
+                                               {"Text": text}]}})
+    return {"session": {"state": {"messages": messages}}}
+
+
+def test_bridge_replies_are_the_agents_text_only(tmp_path: Path):
+    from parley_sim.adapters.harbor import bridge_replies
+
+    path = tmp_path / "bridge-trajectory.json"
+    assert bridge_replies(path) is None
+    path.write_text(json.dumps(_bridge_export(["Try Fri 12:00 (9).", "Done, your turn."])))
+    assert bridge_replies(path) == ["Try Fri 12:00 (9).", "Done, your turn."]
+
+
+def test_collect_counts_chat_leaks_in_simulated_user_trials(tmp_path: Path):
+    from parley_sim.envs import meeting as mt
+
+    cfg, hc = _meeting_cells()
+    cell = next(c for c in hc if c.arm == "soc")
+    rt = HarborRuntime(RuntimeConfig(cell=cell, token=TOKEN))
+    asyncio.run(rt.start())
+    mine = rt.episode.state.inst.free[mt.ASSISTANT]
+    best, value = max(mine.items(), key=lambda kv: kv[1])
+    text = ""
+    for _ in range(12):
+        move = {"type": "propose", "slot": best}
+        text = asyncio.run(rt.take_turn({"message": "How about it?", "move": move}))
+        if "episode is over" in text:
+            break
+    result = rt.result()
+    assert "episode is over" in text and ("Booked:" in text or "No meeting was booked" in text)
+    _fake_trial(tmp_path / "job", "t0", {"name": "claude-code", "model_name": "anthropic/x"}, result,
+                "2026-11-27T00:00:00")
+    replies = [f"I proposed {best} (worth {value:g} to my manager).", "Done, your turn."]
+    agent_dir = tmp_path / "job" / "t0" / "agent"
+    agent_dir.mkdir()
+    (agent_dir / "bridge-trajectory.json").write_text(json.dumps(_bridge_export(replies)))
+    counts = collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], tmp_path / "run")
+    assert counts["kept"] == 1 and counts["chat_replies"] == 2 and counts["chat_leaks"] == 1
+    row = [json.loads(l) for l in (tmp_path / "run" / "manifest.jsonl").read_text().splitlines()][1]
+    assert row["chat"] == {"replies": replies, "leaks": 1}
+
+
+def test_an_environment_error_on_a_tool_move_ends_the_episode_cleanly():
+    soc = next(c for c in cells(config()) if c.arm == "soc")
+    rt = HarborRuntime(RuntimeConfig(cell=soc, token=TOKEN))
+    asyncio.run(rt.start())
+
+    def broken(*a, **kw):
+        raise RuntimeError("environment bug")
+
+    rt.episode.env.apply = broken
+    move = {"message": "hi", "move": PROPOSE, "explanation": "x"}
+    first = asyncio.run(rt.take_turn(move))
+    again = asyncio.run(rt.take_turn(move))  # not a stale pending request
+    assert "ended early" in first and "ended early" in again
+    assert rt.pending is None and rt.result()["completed"] == 0
+
+
+def test_chat_leaks_are_counted_for_unfinished_trials_too(tmp_path: Path):
+    from parley_sim.envs import meeting as mt
+
+    cfg, hc = _meeting_cells()
+    cell = next(c for c in hc if c.arm == "soc")
+    rt = HarborRuntime(RuntimeConfig(cell=cell, token=TOKEN))
+    asyncio.run(rt.start())
+    best, value = max(rt.episode.state.inst.free[mt.ASSISTANT].items(), key=lambda kv: kv[1])
+    asyncio.run(rt.take_turn({"message": "Hi", "move": {"type": "propose", "slot": best}}))
+    result = rt.result()  # the episode is not over
+    assert result["completed"] == 0
+    _fake_trial(tmp_path / "job", "t0", {"name": "claude-code", "model_name": "anthropic/x"}, result,
+                "2026-11-27T00:00:00")
+    (tmp_path / "job" / "t0" / "agent").mkdir()
+    (tmp_path / "job" / "t0" / "agent" / "bridge-trajectory.json").write_text(
+        json.dumps(_bridge_export([f"{best} is worth {value:g} to me."])))
+    counts = collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], tmp_path / "run")
+    assert counts["chat_replies"] == 1 and counts["chat_leaks"] == 1
+
+
+def test_a_failed_re_export_leaves_the_previous_task(tmp_path: Path):
+    cfg = config()
+    cell = cells(cfg)[0]
+    task = export_task(tmp_path, cell, chash=config_hash(cfg), image="x")
+    before = (task / "task.toml").read_text()
+    with pytest.raises(ValueError, match="not a file"):
+        export_task(tmp_path, cell, chash=config_hash(cfg), image="x", extra_ca=tmp_path / "missing.crt")
+    assert (task / "task.toml").read_text() == before
+    assert [p.name for p in tmp_path.iterdir()] == [task.name]
+
+
+def test_inline_refs_keeps_properties_named_like_definition_tables():
+    from parley_sim.adapters.harbor import inline_refs
+
+    schema = {"type": "object", "required": ["definitions"],
+              "properties": {"definitions": {"type": "string"}, "n": {"$ref": "#/$defs/N"}},
+              "$defs": {"N": {"type": "integer"}}}
+    out = inline_refs(schema)
+    assert out["properties"] == {"definitions": {"type": "string"}, "n": {"type": "integer"}}
+    assert "$defs" not in out
+
+
+def test_cli_rejects_zero_harbor_user_replicates(tmp_path: Path, capsys):
+    assert main(["harbor-export", str(ROOT / "configs" / "meeting-canary.yaml"), "--out", str(tmp_path),
+                 "--image", "x", "--harbor-user-arm", "hu", "--harbor-user-replicates", "0"]) == 2
+
+
+def test_collect_recovers_from_an_interrupted_publish(tmp_path: Path):
+    """A collect killed after moving traces/ aside but before replacing the
+    manifest: the next collect restores the previous run instead of deleting it."""
+    from parley_sim.adapters.harbor import _recover_run
+
+    cfg = config()
+    _, result, _ = play(cells(cfg)[0], [accept_last] * 10)
+    _fake_trial(tmp_path / "job", "t0", {"name": "claude-code", "model_name": "anthropic/x"}, result,
+                "2026-11-27T00:00:00")
+    out = tmp_path / "run"
+    collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], out)
+    manifest = (out / "manifest.jsonl").read_text()
+    traces = sorted(p.name for p in (out / "traces").iterdir())
+    # Killed mid-swap: traces moved aside, new ones in place, manifest not yet replaced.
+    (out / "traces").rename(out / "traces.previous")
+    (out / "traces").mkdir()
+    (out / "traces" / "new.jsonl").write_text("{}\n")
+    (out / "manifest.jsonl.collecting").write_text("{}\n")
+    _recover_run(out)
+    assert sorted(p.name for p in (out / "traces").iterdir()) == traces
+    assert (out / "manifest.jsonl").read_text() == manifest and not (out / "traces.previous").exists()
+    # Killed after the commit point: only the old traces are left to remove.
+    (out / "manifest.jsonl.collecting").unlink()
+    (out / "traces.previous").mkdir()
+    _recover_run(out)
+    assert not (out / "traces.previous").exists()
+    assert sorted(p.name for p in (out / "traces").iterdir()) == traces
+    # Killed between the two moves: no traces/ at all.
+    (out / "traces").rename(out / "traces.previous")
+    (out / "manifest.jsonl.collecting").write_text("{}\n")
+    _recover_run(out)
+    assert sorted(p.name for p in (out / "traces").iterdir()) == traces
+    # Through collect itself, when that collection keeps nothing (another config).
+    (out / "traces").rename(out / "traces.previous")
+    (out / "manifest.jsonl.collecting").write_text("{}\n")
+    other = config(lineup=[cfg.lineup[0], {**cfg.lineup[1].model_dump(exclude_none=True), "model": "o/m"}])
+    assert collect_jobs(other.model_dump(), config_hash(other), [tmp_path / "job"], out)["kept"] == 0
+    assert sorted(p.name for p in (out / "traces").iterdir()) == traces
+    assert (out / "manifest.jsonl").read_text() == manifest
+
+
+def _external_trial(job: Path, name: str, user_model: str, seed_index: int = 0) -> None:
+    """A finished harbor-user trial: the contact (played from outside) proposes
+    a mutual slot and the assistant accepts it."""
+    from parley_sim.envs import meeting as mt
+
+    _, hc = _meeting_cells(external_arm="harbor-user")
+    cell = [c for c in hc if c.arm == "harbor-user"][seed_index]
+    rt = HarborRuntime(RuntimeConfig(cell=cell, token=TOKEN, counterpart_token="c" * 24))
+    asyncio.run(rt.start(mt.CONTACT))
+    inst = rt.episode.state.inst
+    slot = sorted(set(inst.free[mt.ASSISTANT]) & set(inst.free[mt.CONTACT]))[0]
+    asyncio.run(rt.take_turn({"message": "Hi", "move": {"type": "propose", "slot": slot}}, mt.CONTACT))
+    asyncio.run(rt.take_turn({"message": "Done", "move": {"type": "accept"}}))
+    result = rt.result()
+    assert result["completed"] == 1 and result["verified"] == 1
+    _fake_trial(job, name, {"name": "claude-code", "model_name": "anthropic/x"}, result,
+                f"2026-11-28T00:0{len(list(job.iterdir())) if job.exists() else 0}:00")
+    config = json.loads((job / name / "config.json").read_text())
+    config["user_agent"] = {"name": "claude-code", "model_name": user_model, "bridge": {"kind": "acp"}}
+    (job / name / "config.json").write_text(json.dumps(config))
+
+
+def test_collect_records_and_checks_the_simulated_user_of_an_external_arm(tmp_path: Path):
+    cfg, _ = _meeting_cells(external_arm="harbor-user")
+    _external_trial(tmp_path / "job", "a", "anthropic/claude-haiku-5-5")
+    counts = collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], tmp_path / "run")
+    rows = [json.loads(l) for l in (tmp_path / "run" / "manifest.jsonl").read_text().splitlines()]
+    user = {"agent": "claude-code", "model": "anthropic/claude-haiku-5-5", "persona": None,
+            "persona_digest": None, "bridge": "acp"}
+    assert counts["kept"] == 1 and rows[1]["counterpart"] == user
+    assert rows[0]["config"]["external_arms"] == {"harbor-user": user}
+    # Same cell and agent, another simulated user model: refused, not deduplicated away.
+    _external_trial(tmp_path / "job", "b", "other/model")
+    with pytest.raises(ValueError, match="different simulated users"):
+        collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], tmp_path / "run2")
+
+
+def test_report_refuses_one_external_arm_played_by_different_simulated_users(tmp_path: Path):
+    cfg, _ = _meeting_cells(external_arm="harbor-user")
+    _external_trial(tmp_path / "j1", "a", "anthropic/claude-haiku-5-5", seed_index=0)
+    _external_trial(tmp_path / "j2", "b", "other/model", seed_index=1)
+    for j in ("j1", "j2"):
+        collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / j], tmp_path / f"run-{j}")
+    with pytest.raises(ValueError, match="arm 'harbor-user' is defined differently"):
+        build_report(tmp_path / "run-j1", tmp_path / "run-j2")
+
+
+def test_report_refuses_two_agents_that_share_a_focal_name_across_collections(tmp_path: Path):
+    cfg = config()
+    for i, model in enumerate(["org/model", "org-model"]):
+        _, result, _ = play(cells(cfg)[i], [accept_last] * 10)
+        _fake_trial(tmp_path / f"job{i}", "t", {"name": "claude-code", "model_name": model}, result,
+                    "2026-11-28T00:00:00")
+        collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / f"job{i}"], tmp_path / f"run{i}")
+    with pytest.raises(ValueError, match="configured differently"):
+        build_report(tmp_path / "run0", tmp_path / "run1")
+
+
+def test_simulated_users_with_different_persona_texts_are_different(tmp_path: Path):
+    from parley_sim.adapters.harbor import _simulated_user
+
+    user = {"name": "claude-code", "model_name": "m", "user_persona_path": "/p/usersim-s00.md"}
+    for d, digest in (("a", "sha256:" + "1" * 64), ("b", "sha256:" + "2" * 64)):
+        (tmp_path / d).mkdir()
+        (tmp_path / d / "lock.json").write_text(json.dumps({"user_persona": {"digest": digest}}))
+    one, two = (_simulated_user(user, tmp_path / d) for d in ("a", "b"))
+    assert one["persona"] == two["persona"] == "usersim-s00.md" and one != two
+
+
+def test_reserved_arm_names_cannot_be_played_from_outside():
+    cfg = load_config(ROOT / "configs" / "meeting-canary.yaml").model_copy(update={"run_arms": ["aoc"]})
+    for name in ("soc", "aoc"):
+        with pytest.raises(ValueError, match="reserved"):
+            harbor_cells(build_grid(cfg), run_id=cfg.run_id, env=cfg.env, env_config=cfg.env_config,
+                         lineup=cfg.lineup, external_arm=name)
+
+
+def test_a_failed_task_swap_restores_the_previous_task(tmp_path: Path, monkeypatch):
+    cfg = config()
+    cell = cells(cfg)[0]
+    task = export_task(tmp_path, cell, chash=config_hash(cfg), image="x")
+    before = (task / "task.toml").read_text()
+    real = Path.rename
+
+    def flaky(self, target):
+        if Path(target) == task and self.name.endswith(".exporting"):
+            raise OSError("interrupted")
+        return real(self, target)
+
+    monkeypatch.setattr(Path, "rename", flaky)
+    with pytest.raises(OSError):
+        export_task(tmp_path, cell, chash=config_hash(cfg), image="x")
+    assert (task / "task.toml").read_text() == before
+
+
+def test_an_error_after_the_manifest_commit_keeps_the_new_traces(tmp_path: Path, monkeypatch):
+    import parley_sim.adapters.harbor as hb
+
+    cfg = config()
+    agent = {"name": "claude-code", "model_name": "anthropic/x"}
+    for i, cell in enumerate(cells(cfg)[:2]):
+        _, result, _ = play(cell, [accept_last] * 10)
+        _fake_trial(tmp_path / "job", f"t{i}", agent, result, f"2026-11-28T00:0{i}:00")
+    out = tmp_path / "run"
+    collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job" / "t0"], out)
+    real = hb.os.replace
+
+    def replace_then_fail(src, dst):
+        real(src, dst)
+        raise KeyboardInterrupt  # after the commit point
+
+    monkeypatch.setattr(hb.os, "replace", replace_then_fail)
+    with pytest.raises(KeyboardInterrupt):
+        collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], out)
+    rows = [json.loads(l) for l in (out / "manifest.jsonl").read_text().splitlines()][1:]
+    assert sorted(Path(r["trace"]).name for r in rows) == sorted(p.name for p in (out / "traces").iterdir())
+
+
+def test_an_export_interrupted_mid_swap_is_recovered(tmp_path: Path, monkeypatch):
+    """Killed after moving the old task aside: the next export puts it back
+    first, so a failure in that export still leaves the previous task."""
+    cfg = config()
+    cell = cells(cfg)[0]
+    task = export_task(tmp_path, cell, chash=config_hash(cfg), image="x")
+    before = (task / "task.toml").read_text()
+    task.rename(tmp_path / f".{task.name}.previous")  # the interrupted swap
+    real = Path.rename
+
+    def flaky(self, target):
+        if Path(target) == task and self.name.endswith(".exporting"):
+            raise OSError("interrupted again")
+        return real(self, target)
+
+    monkeypatch.setattr(Path, "rename", flaky)
+    with pytest.raises(OSError):
+        export_task(tmp_path, cell, chash=config_hash(cfg), image="x")
+    assert (task / "task.toml").read_text() == before
+
+
+def test_collect_refuses_a_persona_it_cannot_identify(tmp_path: Path):
+    """Without Harbor's per-trial persona digest, two personas with one file name
+    would look identical; collect refuses rather than treat them as one arm."""
+    cfg, _ = _meeting_cells(external_arm="harbor-user")
+    _external_trial(tmp_path / "job", "a", "anthropic/claude-haiku-5-5")
+    config = json.loads((tmp_path / "job" / "a" / "config.json").read_text())
+    config["user_agent"]["user_persona_path"] = str(tmp_path / "gone" / "usersim-s00.md")
+    (tmp_path / "job" / "a" / "config.json").write_text(json.dumps(config))
+    with pytest.raises(ValueError, match=r"no persona digest in the trial's lock\.json"):
+        collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], tmp_path / "run")
+
+
+def test_the_persona_is_identified_as_it_was_when_the_trial_ran(tmp_path: Path):
+    """Harbor's lock.json records the persona digest at trial time; a persona
+    file edited afterwards doesn't change the trial's identity."""
+    from parley_sim.adapters.harbor import _simulated_user
+
+    persona = tmp_path / "usersim-s00.md"
+    persona.write_text("edited after the trial")
+    user = {"name": "claude-code", "model_name": "m", "user_persona_path": str(persona)}
+    for name, digest in (("t1", "sha256:" + "a" * 64), ("t2", "sha256:" + "b" * 64)):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "lock.json").write_text(json.dumps(
+            {"user_persona": {"path": str(persona), "digest": digest}}))
+    one, two = _simulated_user(user, tmp_path / "t1"), _simulated_user(user, tmp_path / "t2")
+    assert one["persona_digest"] == "sha256:" + "a" * 64 and one != two
+    # Without a lock, the persona is unidentified (collect then refuses the trial),
+    # even though the file is there: it may have changed since the trial.
+    assert _simulated_user(user, tmp_path)["persona_digest"] is None
+
+
+def test_a_refused_export_still_recovers_an_interrupted_swap(tmp_path: Path):
+    """Recovery runs before any input check, in export_task and in the CLI."""
+    cfg = config()
+    cell = cells(cfg)[0]
+    task = export_task(tmp_path / "out", cell, chash=config_hash(cfg), image="x")
+    before = (task / "task.toml").read_text()
+    backup = task.parent / f".{task.name}.previous"
+    task.rename(backup)  # killed mid-swap
+    with pytest.raises(ValueError, match="not a file"):
+        export_task(tmp_path / "out", cell, chash=config_hash(cfg), image="x",
+                    extra_ca=tmp_path / "missing.crt")
+    assert (task / "task.toml").read_text() == before and not backup.exists()
+    # The CLI refuses a bad wheel before export_task runs; it recovers first too.
+    task.rename(backup)
+    canary = str(ROOT / "configs" / "meeting-canary.yaml")
+    assert main(["harbor-export", canary, "--out", str(tmp_path / "out"),
+                 "--wheel", str(tmp_path / "nope.whl")]) == 2
+    assert (task / "task.toml").read_text() == before and not backup.exists()
+    # Even a config that fails to load comes after recovery.
+    task.rename(backup)
+    with pytest.raises(FileNotFoundError):
+        main(["harbor-export", str(tmp_path / "missing.yaml"), "--out", str(tmp_path / "out"),
+              "--image", "x"])
+    assert (task / "task.toml").read_text() == before and not backup.exists()

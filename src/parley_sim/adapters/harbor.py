@@ -119,11 +119,14 @@ class HarborCell:
 
 
 def harbor_cells(grid: list[Any], *, run_id: str, env: str, env_config: dict[str, Any],
-                 lineup: list[ModelSpec], reward_metric: str = "focal_surplus_share") -> list[HarborCell]:
+                 lineup: list[ModelSpec], reward_metric: str = "focal_surplus_share",
+                 external_arm: str | None = None, external_replicates: int = 1) -> list[HarborCell]:
     """A matched grid without its focal model: one cell per (seed, arm,
     replicate), counterparts seated as a local run would seat them. `grid` is
     `parley_sim.matched.build_grid(cfg)`; the cells of its first focal model
-    are used."""
+    are used. `external_arm` adds an arm on the same seeds whose counterpart
+    seats are played from outside (by Harbor's simulated user) through the
+    counterpart tools."""
     kinds = envs.get(env, allow_import=True).metric_kinds
     if reward_metric not in kinds:
         raise ValueError(f"reward metric {reward_metric!r} is not one of {sorted(kinds)}")
@@ -141,6 +144,17 @@ def harbor_cells(grid: list[Any], *, run_id: str, env: str, env_config: dict[str
                               env_config=dict(env_config),
                               lineup=[specs[n].model_dump(exclude_none=True) for n in members],
                               reward_metric=reward_metric))
+    if external_arm:
+        if external_arm in {c.arm for c in out} | {"soc", "aoc"}:
+            raise ValueError(f"arm {external_arm!r} already exists in the config, or is reserved")
+        seen: set[int] = set()
+        for c in list(out):  # one per seed, from whichever arms the config runs
+            if c.seed in seen:
+                continue
+            seen.add(c.seed)
+            for r in range(external_replicates):
+                out.append(replace(c, arm=external_arm, replicate=r, lineup=[],
+                                   seats={s: f"{EXTERNAL}{external_arm}" for s in c.seats}))
     return out
 
 
@@ -166,6 +180,7 @@ class RuntimeConfig:
     token: str
     seed_secret: str | None = None
     persona_file: str | None = None
+    counterpart_token: str | None = None  # for seats played from outside (external:...)
 
     @classmethod
     def from_env(cls, environ: dict[str, str] | None = None) -> RuntimeConfig:
@@ -175,12 +190,27 @@ class RuntimeConfig:
             raise ValueError("PARLEY_RESULT_TOKEN must be set (16+ characters)")
         return cls(cell=HarborCell.decode(e["PARLEY_CELL"]), token=token,
                    seed_secret=e.get("PARLEY_SEED_SECRET") or None,
-                   persona_file=e.get("PARLEY_PERSONA_FILE") or None)
+                   persona_file=e.get("PARLEY_PERSONA_FILE") or None,
+                   counterpart_token=e.get("PARLEY_COUNTERPART_TOKEN") or None)
+
+
+EXTERNAL = "external:"  # seat label prefix: played from outside, through the counterpart tools
+# Told to the agent under test when the other side is played from outside: in a Harbor
+# simulated-user trial the chat that prompts the agent is the counterparty itself.
+CHAT_REPLY = "Done, your turn."
+CHAT_NOTE = ("Important: the chat that prompts you is the other side of this episode, not someone "
+             "on your side. Everything you write in that chat reaches them, including notes while "
+             "you work. Act only through these tools, write nothing else in the chat, and end each "
+             f"of your turns with exactly this chat reply: \"{CHAT_REPLY}\"")
+TOOL_CP_START = "counterpart_start"
+TOOL_CP_TURN = "counterpart_take_turn"
 
 
 class HarborRuntime:
-    """One episode, played by the agent through MCP. Calls are serialised:
-    the episode has one pending focal decision at a time."""
+    """One episode, played through MCP by the agent and, for seats labelled
+    `external:...`, by an outside counterparty (Harbor's simulated user).
+    Calls are serialised; the episode has one pending decision at a time.
+    Model and scripted counterparts are played inside the sidecar."""
 
     def __init__(self, config: RuntimeConfig, client_factory=build_client):
         self.config = config
@@ -201,11 +231,15 @@ class HarborRuntime:
         for spec in self.lineup.values():  # fail at startup, not at the agent's first call
             if spec.provider != "scripted":
                 self.clients[spec.name] = client_factory(spec)
+        self.external = {s for s, label in cell.seats.items() if label.startswith(EXTERNAL)}
+        if self.external and len(config.counterpart_token or "") < 16:
+            raise ValueError("a seat played from outside needs PARLEY_COUNTERPART_TOKEN (16+ characters)")
+        self.players = {cell.focal_seat, *self.external}  # seats played through tools
         self.breaker = Breaker(3)
         self.episode: Episode | None = None
         self.counterparts: dict[Seat, ModelSeat | ScriptedSeat] = {}
         self.pending: DecisionRequest | None = None
-        self.last_strike: str | None = None
+        self.last_strike: dict[Seat, str | None] = {}
         self.error: str | None = None
         self._lock = asyncio.Lock()
 
@@ -236,58 +270,85 @@ class HarborRuntime:
         return Episode(self.entry.env(), spec, policies)
 
     async def _advance(self, event: DecisionRequest | EpisodeComplete) -> None:
-        """Play counterpart turns until the focal seat must act or the episode ends."""
+        """Play in-sidecar counterpart turns until a tool-played seat must act
+        or the episode ends."""
         episode = self.episode
         assert episode is not None
         try:
-            while isinstance(event, DecisionRequest) and event.seat != self.config.cell.focal_seat:
+            while isinstance(event, DecisionRequest) and event.seat not in self.players:
                 event = episode.advance(await self.counterparts[event.seat].decide(event))
         except BaseException as exc:
             # Any interruption, including a cancelled tool call, ends the
             # episode as errored: the focal request it held has already been
             # consumed, so it must not stay pending.
-            if episode.result is None:
-                episode.abort(repr(exc))
-            self.error = repr(exc)[:500]
-            self.pending = None
+            self._abort(exc)
             if not isinstance(exc, Exception):
                 raise
             event = episode.result
         self.pending = event if isinstance(event, DecisionRequest) else None
 
-    def _prompt(self) -> str:
+    def _abort(self, exc: BaseException) -> None:
+        episode = self.episode
+        if episode is not None and episode.result is None:
+            episode.abort(repr(exc))
+        self.error = repr(exc)[:500]
+        self.pending = None
+
+    def _prompt(self, seat: Seat | None = None) -> str:
+        seat = seat or self.config.cell.focal_seat
+        start, turn = (TOOL_START, TOOL_TURN) if seat not in self.external else (TOOL_CP_START, TOOL_CP_TURN)
         episode = self.episode
         if episode is None:
-            return f"Call {TOOL_START} first."
+            return f"Call {start} first."
         if self.pending is None:
             if self.error is not None:
                 return ("The episode ended early: a counterpart could not continue. "
                         "Do not call any more tools.")
-            score = (episode.result.outcomes or {}).get(self.config.cell.focal_seat) \
-                if episode.result else None
-            return ("The episode is over."
+            score = (episode.result.outcomes or {}).get(seat) if episode.result else None
+            describe = getattr(episode.env, "describe_end", None)
+            end = f" {describe(episode.state, seat)}" if describe else ""
+            return ("The episode is over." + end
                     + (f" Your score (value of the outcome to you): {score:g}." if score is not None else "")
                     + " Do not call any more tools.")
+        if self.pending.seat != seat:
+            return (f"It is the other side's turn. Wait until they have replied, then call "
+                    f"`{start}` to see what they did.")
         _, user = self.text.render(self.pending.observation)
-        user = _JSON_REPLY.sub("", user) + f"\n\nTake your turn with `{TOOL_TURN}`."
-
-        note = (f"Your previous turn could not be used ({self.last_strike}); "
-                "no move was made for it.\n\n" if self.last_strike else "")
+        user = _JSON_REPLY.sub("", user) + f"\n\nTake your turn with `{turn}`."
+        strike = self.last_strike.get(seat)
+        note = (f"Your previous turn could not be used ({strike}); "
+                "no move was made for it.\n\n" if strike else "")
         return note + user
 
-    async def start(self) -> str:
+    async def start(self, seat: Seat | None = None) -> str:
+        """The seat's role, rules and private information, and where the
+        episode stands. The first call by either side starts the episode."""
+        seat = seat or self.config.cell.focal_seat
         async with self._lock:
-            if self.episode is not None:
-                return "The episode has already started. Current state:\n\n" + self._prompt()
-            self.episode = self._build()
-            await self._advance(self.episode.advance())
-            if self.pending is None:
-                return self._prompt()
-            system, _ = self.text.render(self.pending.observation)
-            return f"{system}\n\n{self._prompt()}"
+            if self.episode is None:
+                self.episode = self._build()
+                try:
+                    first = self.episode.advance()
+                except Exception as exc:  # the environment failed to start the episode
+                    self._abort(exc)
+                else:
+                    await self._advance(first)
+            episode = self.episode
+            if episode.result is not None:
+                return self._for(seat, self._prompt(seat))
+            system, _ = self.text.render(episode.env.observe(episode.state, seat))
+            return self._for(seat, f"{system}\n\n{self._prompt(seat)}")
 
-    def _focal_result(self, req: DecisionRequest, submitted: JSON) -> DecisionResult:
-        raw: JSON = {"source": "harbor", "payload": submitted}
+    def _for(self, seat: Seat, text: str) -> str:
+        """Every response to the agent under test, when the other side is played
+        from outside, ends with how to use the chat (it reaches the other side)."""
+        if seat in self.external or not self.external:
+            return text
+        return f"{text}\n\n{CHAT_NOTE}"
+
+    def _focal_result(self, req: DecisionRequest, submitted: JSON,
+                      source: str = "harbor") -> DecisionResult:
+        raw: JSON = {"source": source, "payload": submitted}
         try:
             if len(json.dumps(submitted)) > MAX_ACTION_CHARS:
                 raise MalformedOutput(f"turn is longer than {MAX_ACTION_CHARS} characters")
@@ -298,19 +359,43 @@ class HarborRuntime:
                                   detail=detail[:500], raw=raw)
         return DecisionResult(req.request_id, parsed, explanation=explanation, raw=raw)
 
-    async def take_turn(self, action: Any) -> str:
+    async def take_turn(self, action: Any, seat: Seat | None = None) -> str:
+        seat = seat or self.config.cell.focal_seat
         async with self._lock:
             episode, req = self.episode, self.pending
-            if episode is None or req is None:
-                return self._prompt()
-            result = self._focal_result(req, action)
-            event = episode.advance(result)
+            if episode is None or req is None or req.seat != seat:
+                why = ("" if episode is not None and req is None  # over: the prompt says so
+                       else "Your action was NOT recorded: it is not your turn.\n\n")
+                return self._for(seat, why + self._prompt(seat))
+            result = self._focal_result(req, action,
+                                        source="harbor-user" if seat in self.external else "harbor")
+            try:
+                event = episode.advance(result)
+            except Exception as exc:  # the environment failed; illegal moves are strikes, not this
+                self._abort(exc)
+                return self._for(seat, self._prompt(seat))
             self.pending = None  # consumed; _advance sets the next one
             decision = next(l for l in reversed(episode.lines) if l["type"] == "decision"
-                            and l["seat"] == self.config.cell.focal_seat)
-            self.last_strike = decision["strike"]
+                            and l["seat"] == seat)
+            self.last_strike[seat] = decision["strike"]
             await self._advance(event)
-            return self._prompt()
+            text = self._prompt(seat)
+            if decision["strike"] and not text.startswith("Your previous turn could not be used"):
+                # Not this seat's turn again yet, so the strike note wouldn't show.
+                detail = decision.get("detail") or decision["strike"]
+                text = (f"Your action could not be used ({detail}); it counted as your turn, "
+                        f"with no move.\n\n{text}")
+            return self._for(seat, text)
+
+    def check_counterpart_token(self, token: str) -> None:
+        if not self.external or not hmac.compare_digest(
+                token.encode(), (self.config.counterpart_token or "").encode()):
+            raise PermissionError("these tools are for the other side of the episode, not for you")
+
+    def counterpart_seat(self) -> Seat:
+        if len(self.external) != 1:
+            raise ValueError("exactly one seat must be played from outside")
+        return next(iter(self.external))
 
     def result(self) -> dict[str, Any]:
         """The scored outcome, for the verifier only. Mid-episode the trace is
@@ -318,7 +403,8 @@ class HarborRuntime:
         cell = self.config.cell
         out: dict[str, Any] = {
             "cell": {"run_id": cell.run_id, "config_hash": cell.config_hash, "seed": cell.seed,
-                     "arm": cell.arm, "replicate": cell.replicate, "seats": cell.seats},
+                     "arm": cell.arm, "replicate": cell.replicate, "seats": cell.seats,
+                     "focal_seat": cell.focal_seat},
             "persona_digest": digest(self.personas) if self.personas is not None else None,
             "completed": 0, "errored": 0, "reward": 0.0, "verified": 0,
             "problems": [], "metrics": {}, "trace": []}
@@ -372,9 +458,10 @@ def inline_refs(schema: JSON) -> JSON:
                 raise ValueError(f"recursive $ref {ref!r}")
             target = resolve(tables[prefix][name], seen | {ref})
             return {**target, **{k: resolve(v, seen) for k, v in node.items() if k != "$ref"}}
-        return {k: resolve(v, seen) for k, v in node.items() if k not in ("$defs", "definitions")}
+        return {k: resolve(v, seen) for k, v in node.items()}
 
-    return resolve(schema, frozenset())
+    root = {k: v for k, v in schema.items() if k not in ("$defs", "definitions")}
+    return resolve(root, frozenset())
 
 
 def create_runtime_app(runtime: HarborRuntime) -> Any:
@@ -411,6 +498,26 @@ def create_runtime_app(runtime: HarborRuntime) -> Any:
         "Take your turn: one action matching this JSON schema: " + json.dumps(tool_schema or schema)
         + ". Returns what happens next, or the end of the episode."))(take_turn)
 
+    if runtime.external:
+        async def counterpart_start(token: str) -> str:
+            runtime.check_counterpart_token(token)
+            return await runtime.start(runtime.counterpart_seat())
+
+        async def counterpart_take_turn(token: str, action: dict[str, Any]) -> str:
+            runtime.check_counterpart_token(token)
+            return await runtime.take_turn(action, runtime.counterpart_seat())
+
+        if tool_schema is not None:
+            counterpart_take_turn.__annotations__["action"] = Annotated[
+                dict[str, Any], Field(json_schema_extra=tool_schema)]
+        note = " For the other side of the episode only: needs its token."
+        mcp.tool(name=TOOL_CP_START, description=(
+            "Start or check the episode as the other side: your role, rules, private "
+            "information and where things stand." + note))(counterpart_start)
+        mcp.tool(name=TOOL_CP_TURN, description=(
+            "Take the other side's turn: one action matching this JSON schema: "
+            + json.dumps(tool_schema or schema) + "." + note))(counterpart_take_turn)
+
     @mcp.custom_route("/health", methods=["GET"])
     async def health(request: Request) -> PlainTextResponse:
         return PlainTextResponse("ok")
@@ -444,6 +551,29 @@ Use the MCP tools on the `{RUNTIME_SERVICE}` server:
 
 How you are scored is described by `{TOOL_START}`. There are no files to write;
 the episode itself is graded.
+"""
+
+COUNTERPART_INSTRUCTION = """\
+You are playing one side of an interactive episode, the `{seat}` seat, against an
+AI assistant who plays the `{focal}` seat. The assistant cannot see this message.
+
+1. Call `{cp_start}` on the `{service}` MCP server with token "{token}". It tells you
+   your role, the rules, your private information, what has happened so far and whose
+   turn it is. Keep your private information to yourself unless you choose to share it.
+2. If it is your turn (it says "You speak first", or shows your turn), call `{cp_turn}`
+   with the same token and one action, before prompting the assistant. The `message` in
+   your action is what the assistant sees from you. An action is a JSON object matching:
+   {schema}
+   Check the tool's reply: if it says your action was not recorded or could not be used,
+   your move did not happen.
+3. When it is the assistant's turn, prompt them through your bridge with exactly this
+   note, then wait for their reply: "{nudge}" In your first prompt only, add: "You are
+   the `{focal}` in this episode." Don't add your move, your private information or
+   anything else: the assistant sees your move through `{start}`.
+4. When they reply, call `{cp_start}` to see what they did, and repeat from step 2 until
+   a tool says the episode is over, then stop.
+
+Play your role as a real person in it would: pursue the goals it describes.
 """
 
 TASK_TOML = """\
@@ -605,18 +735,66 @@ _CA_LINES = ("COPY extra-ca.crt /usr/local/share/ca-certificates/extra-ca.crt\n"
 
 def export_task(out: Path, cell: HarborCell, *, chash: str, wheel: Path | None = None,
                 image: str | None = None, dataset: str = "parley-labs/parley-sim",
-                agent_timeout: float = 1800.0, seed_secret: str | None = None,
+                agent_timeout: float = 1800.0, seed_secret_env: str | None = None,
                 extra_ca: Path | None = None) -> Path:
     """Write one Harbor task directory and return it. The sidecar is either
     built from `wheel` or pulled as a prebuilt `image`. `extra_ca` adds a CA
     certificate to the images (for building behind a TLS-intercepting proxy);
     leave it unset for tasks you publish."""
+    _recover_export(out, cell.name)  # first, so a refused export still repairs one
     if (wheel is None) == (image is None):
         raise ValueError("give exactly one of wheel or image")
+    for path in (wheel, extra_ca):
+        if path is not None and not Path(path).is_file():
+            raise ValueError(f"not a file: {path}")
     cell = replace(cell, config_hash=chash)
-    task = out / cell.name
+    final = out / cell.name
+    backup = out / f".{cell.name}.previous"
+    # Built beside the final directory and swapped in at the end, so a failed
+    # export leaves an earlier export of this task usable.
+    task = out / f".{cell.name}.exporting"
     if task.exists():
         shutil.rmtree(task)
+    try:
+        _write_task(task, cell, wheel=wheel, image=image, dataset=dataset,
+                    agent_timeout=agent_timeout, seed_secret_env=seed_secret_env, extra_ca=extra_ca)
+    except BaseException:
+        shutil.rmtree(task, ignore_errors=True)
+        raise
+    if final.exists():
+        final.rename(backup)
+    try:
+        task.rename(final)
+    except BaseException:
+        if backup.exists() and not final.exists():
+            backup.rename(final)  # the previous export stays usable
+        raise
+    if backup.exists():
+        shutil.rmtree(backup)
+    return final
+
+
+def _recover_export(out: Path, name: str) -> None:
+    """Finish or undo a task swap that an earlier export was killed in."""
+    final, backup = out / name, out / f".{name}.previous"
+    if not backup.is_dir():
+        return
+    if final.exists():
+        shutil.rmtree(backup)  # the swap finished; only the cleanup was missed
+    else:
+        backup.rename(final)  # it didn't: the previous task is still the task
+
+
+def recover_exports(out: Path) -> None:
+    """Repair every interrupted task swap in an export directory."""
+    if out.is_dir():
+        for backup in out.glob(".*.previous"):
+            _recover_export(out, backup.name[1:-len(".previous")])
+
+
+def _write_task(task: Path, cell: HarborCell, *, wheel: Path | None, image: str | None,
+                dataset: str, agent_timeout: float, seed_secret_env: str | None,
+                extra_ca: Path | None) -> None:
     (task / "environment").mkdir(parents=True)
     (task / "tests").mkdir()
     (task / "solution").mkdir()
@@ -644,33 +822,55 @@ def export_task(out: Path, cell: HarborCell, *, chash: str, wheel: Path | None =
         source = f"    image: {image}"
     keys = sorted({k for m in specs if (k := key_env(m))})
     extra_env = "".join(f'      {k}: "${{{k}:-}}"\n' for k in keys)
-    if seed_secret:
-        extra_env += f'      PARLEY_SEED_SECRET: "{seed_secret}"\n'
+    if seed_secret_env:
+        # Passed through from the shell that runs the tasks, as model keys are:
+        # the secret's value is never written into a task.
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", seed_secret_env):
+            raise ValueError(f"not an environment variable name: {seed_secret_env!r}")
+        extra_env += (f'      PARLEY_SEED_SECRET: "${{{seed_secret_env}:?set {seed_secret_env} '
+                      'to the seed secret}"\n')
     volumes = ""
     if persona:
         extra_env += f'      PARLEY_PERSONA_FILE: "{PERSONA_PATH}"\n'
         volumes = ("    volumes:\n      - ${PARLEY_PERSONA_PANEL:?set PARLEY_PERSONA_PANEL to your "
                    f"UserSim persona panel}}:{PERSONA_PATH}:ro\n")
     fmt = dict(task_name=f"{dataset}__{cell.name}", env=cell.env, run_id=cell.run_id, seed=cell.seed,
-               arm=cell.arm, replicate=cell.replicate, config_hash=chash, token=token,
+               arm=cell.arm, replicate=cell.replicate, config_hash=cell.config_hash, token=token,
                agent_timeout=agent_timeout, service=RUNTIME_SERVICE, port=RUNTIME_PORT,
                source=source, cell=cell.encode(), extra_env=extra_env, volumes=volumes, ca=ca)
-    (task / "instruction.md").write_text(INSTRUCTION)
+    external = sorted(s for s, label in cell.seats.items() if label.startswith(EXTERNAL))
+    if len(external) > 1:
+        raise ValueError("only one seat can be played from outside")
+    schema = envs.get(cell.env, allow_import=True).text().action_schema
+    try:
+        schema = inline_refs(schema)  # the oracle and the brief follow no $refs
+    except ValueError:
+        pass
+    if external:
+        cp_token = secrets.token_urlsafe(24)
+        fmt["extra_env"] += f'      PARLEY_COUNTERPART_TOKEN: "{cp_token}"\n'
+        nudge = (f"Your turn. Use your {RUNTIME_SERVICE} tools: `{TOOL_START}` to see "
+                 f"where things stand, then `{TOOL_TURN}`.")
+        (task / "instruction.md").write_text(COUNTERPART_INSTRUCTION.format(
+            seat=external[0], focal=cell.focal_seat, token=cp_token, service=RUNTIME_SERVICE,
+            cp_start=TOOL_CP_START, cp_turn=TOOL_CP_TURN, start=TOOL_START,
+            schema=json.dumps(schema), nudge=nudge))
+    else:
+        (task / "instruction.md").write_text(INSTRUCTION)
     (task / "task.toml").write_text(TASK_TOML.format(**fmt))
     (task / "environment" / "docker-compose.yaml").write_text(COMPOSE.format(**fmt))
     (task / "environment" / "Dockerfile").write_text(MAIN_DOCKERFILE.format(**fmt))
     (task / "tests" / "test.sh").write_text(TEST_SH)
     (task / "tests" / "fetch_result.py").write_text(FETCH_RESULT)
-    schema = envs.get(cell.env, allow_import=True).text().action_schema
-    try:
-        schema = inline_refs(schema)  # the plumbing check follows no $refs
-    except ValueError:
-        pass
+    (task / "tests" / "test.sh").chmod(0o755)
+    if external:
+        # The oracle plays the focal seat only; with the other side played from
+        # outside it could never finish an episode, so these tasks have none.
+        shutil.rmtree(task / "solution", ignore_errors=True)
+        return
     (task / "solution" / "solve.sh").write_text(
         SOLVE_SH.replace("__SCHEMA__", base64.b64encode(json.dumps(schema).encode()).decode()))
-    for sh in (task / "tests" / "test.sh", task / "solution" / "solve.sh"):
-        sh.chmod(0o755)
-    return task
+    (task / "solution" / "solve.sh").chmod(0o755)
 
 
 # --------------------------------------------------------------------------- collect
@@ -699,6 +899,8 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
     are used; then one trial per (task, agent) is kept, the earliest.
     Counterpart usage is counted; the agent's own usage is in Harbor's results."""
     run_id = config["run_id"]
+    if out.is_dir():
+        _recover_run(out)  # first, even if this collection then writes nothing
     trials = sorted({p.parent.parent for d in job_dirs for p in Path(d).rglob("verifier/result.json")},
                     key=lambda t: (json.loads((t / "result.json").read_text()).get("started_at") or "")
                     if (t / "result.json").exists() else "")
@@ -707,6 +909,8 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
     counts = {"trials": 0, "kept": 0, "duplicates": 0, "other_config": 0, "no_config_hash": 0}
     persona_digest = None
     copies: list[tuple[Path, str]] = []  # written only once every trial has been checked
+    slugs: dict[str, tuple[Any, Any]] = {}  # focal model name -> (agent, model) it stands for
+    external_arms: dict[str, Any] = {}  # arm played from outside -> the simulated user that played it
     for trial in trials:
         counts["trials"] += 1
         result = json.loads((trial / "verifier" / "result.json").read_text())
@@ -727,16 +931,38 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
                 raise ValueError(f"{trial} used a different persona panel from earlier trials of "
                                  f"this config; collect each panel's jobs separately")
             persona_digest = digest_here
-        focal = _focal_name(trial_config.get("agent") or {})
+        # An arm played from outside is defined by the simulated user Harbor ran,
+        # which the config hash can't cover: one arm, one simulated user.
+        counterpart = None
+        if any(str(v).startswith(EXTERNAL) for v in (cell.get("seats") or {}).values()):
+            counterpart = _simulated_user(trial_config.get("user_agent"), trial)
+            if counterpart and counterpart["persona"] and counterpart["persona_digest"] is None:
+                raise ValueError(f"{trial}: no persona digest in the trial's lock.json, so the "
+                                 "persona its simulated user played can't be identified (Harbor "
+                                 "0.27 records one when the trial starts)")
+            prior = external_arms.setdefault(cell["arm"], counterpart)
+            if prior != counterpart:
+                raise ValueError(f"arm {cell['arm']!r} was played by different simulated users "
+                                 f"({prior} and {counterpart}); collect them separately")
+        agent = trial_config.get("agent") or {}
+        identity = (agent.get("name") or agent.get("import_path"), agent.get("model_name"))
+        focal = _focal_name(agent)
+        if slugs.setdefault(focal, identity) != identity:
+            raise ValueError(f"agents {slugs[focal]} and {identity} both become the focal model "
+                             f"{focal!r}; collect their jobs separately")
         key = (cell["seed"], focal, cell["arm"], cell["replicate"])
         if key in rows:
             counts["duplicates"] += 1
             continue
-        focals[focal] = {"name": focal, "provider": "harbor", "model": focal}
+        # The raw agent and model, so the report can tell two agents apart
+        # whose names map to the same focal name in separate collections.
+        focals[focal] = {"name": focal, "provider": "harbor",
+                         "model": f"{identity[0]}:{identity[1]}" if identity[1] else str(identity[0])}
         cell_key = f"{run_id}-{cell['seed']}-{focal}-{cell['arm']}-r{cell['replicate']}"
         trace_rel = f"traces/{cell_key}.jsonl"
         done = bool(result.get("completed") and result.get("verified"))
-        lines = read_trace(trial / "verifier" / "trace.jsonl") if done else []
+        trace_path = trial / "verifier" / "trace.jsonl"
+        lines = read_trace(trace_path) if done else []
         if done:
             copies.append((trial / "verifier" / "trace.jsonl", trace_rel))
         rows[key] = {"type": "cell", "cell_key": cell_key,
@@ -745,18 +971,108 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
                      "replicate": cell["replicate"], "seats": cell.get("seats") or {},
                      "status": "done" if done else "errored", "trace": trace_rel if done else None,
                      "usage": _usage(lines), "harbor_trial": str(trial)}
+        if counterpart is not None:
+            rows[key]["counterpart"] = counterpart
         if not done:
             rows[key]["error"] = "; ".join(result.get("problems") or []) or "not completed"
+        replies = bridge_replies(trial / "agent" / "bridge-trajectory.json")
+        if replies is not None:  # a simulated-user trial: the agent's chat reached the other side
+            leak = envs.get(config["env"], allow_import=True).chat_leak
+            seat = cell.get("focal_seat")
+            # The agent's private information is in its observations, which an
+            # unfinished trial's saved trace has too.
+            seen = lines or (read_trace(trace_path) if trace_path.exists() else [])
+            usable = any(l.get("type") == "decision" and l.get("seat") == seat for l in seen)
+            leaks = sum(leak(seen, seat, t) for t in replies) if leak and seat and usable else None
+            rows[key]["chat"] = {"replies": replies, "leaks": leaks}
+            counts["chat_replies"] = counts.get("chat_replies", 0) + len(replies)
+            if leaks is not None:
+                counts["chat_leaks"] = counts.get("chat_leaks", 0) + leaks
         counts["kept"] += 1
     config = json.loads(json.dumps(config))
     config["lineup"] = [*config["lineup"], *focals.values()]
     config["focal_models"] = sorted(focals)
+    if external_arms:
+        config["external_arms"] = external_arms  # read by the report as these arms' definitions
     run = {"type": "run", "run_id": f"{run_id}-harbor", "config_hash": chash, "config": config,
            "source": "harbor"}
     if persona_digest:
         run["persona_digest"] = persona_digest
-    _write_run(out, [run, *rows.values()], copies)
+    if rows:  # an empty collection (e.g. the wrong config) leaves an existing run alone
+        _write_run(out, [run, *rows.values()], copies)
     return counts
+
+
+def _simulated_user(user_agent: dict[str, Any] | None,
+                    trial: Path | None = None) -> dict[str, Any] | None:
+    """What defines a Harbor simulated user as a counterpart: its agent, model,
+    persona and bridge (None for a trial run without one). The persona is
+    identified by the digest Harbor recorded in the trial's lock.json when the
+    trial ran (None if there is none); the file name is kept for display. The
+    file as it is now is never used: it may have changed since the trial."""
+    if not user_agent:
+        return None
+    bridge = user_agent.get("bridge") or {}
+    persona = user_agent.get("user_persona_path")
+    persona_digest = _locked_persona_digest(trial) if persona else None
+    return {"agent": user_agent.get("name") or user_agent.get("import_path"),
+            "model": user_agent.get("model_name"),
+            "persona": Path(persona).name if persona else None,
+            "persona_digest": persona_digest,
+            "bridge": bridge.get("kind") if isinstance(bridge, dict) else bridge}
+
+
+def _locked_persona_digest(trial: Path | None) -> str | None:
+    """The persona digest Harbor wrote into the trial's lock.json at trial time."""
+    if trial is None:
+        return None
+    try:
+        lock = json.loads((trial / "lock.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    digest = (lock.get("user_persona") or {}).get("digest")
+    return digest if isinstance(digest, str) and digest else None
+
+
+def bridge_replies(path: Path) -> list[str] | None:
+    """The agent under test's chat replies in a Harbor simulated-user trial,
+    from the ACP bridge's session export (`agent/bridge-trajectory.json`):
+    every text block it wrote, in order. None when there is no bridge log."""
+    try:
+        export = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    messages = ((export.get("session") or {}).get("state") or {}).get("messages") or []
+    replies: list[str] = []
+    for message in messages:
+        for role, body in (message.items() if isinstance(message, dict) else ()):
+            if role.lower() == "user" or not isinstance(body, dict):
+                continue  # the simulated user's prompts
+            for block in body.get("content") or []:
+                text = block.get("Text") if isinstance(block, dict) else None
+                if isinstance(text, str) and text.strip():
+                    replies.append(text)
+    return replies
+
+
+def _recover_run(out: Path) -> None:
+    """Finish or undo a `_write_run` that was killed part-way, so the manifest
+    and `traces/` match again. The new manifest is written to
+    `manifest.jsonl.collecting` before any directory moves, and replacing the
+    manifest is the commit point: while that file still exists, the previous
+    run is the real one."""
+    traces, old = out / "traces", out / "traces.previous"
+    pending = out / "manifest.jsonl.collecting"
+    if not old.exists():
+        return
+    if pending.exists():  # not committed: put the previous traces back
+        if traces.exists():
+            shutil.rmtree(traces)
+        old.rename(traces)
+    elif traces.exists():  # committed: only the cleanup was missed
+        shutil.rmtree(old)
+    else:
+        old.rename(traces)
 
 
 def _write_run(out: Path, rows: list[dict[str, Any]], copies: list[tuple[Path, str]]) -> None:
@@ -766,6 +1082,7 @@ def _write_run(out: Path, rows: list[dict[str, Any]], copies: list[tuple[Path, s
     touched."""
     out.mkdir(parents=True, exist_ok=True)
     staging, old = out / "traces.collecting", out / "traces.previous"
+    _recover_run(out)
     for d in (staging, old):
         if d.exists():
             shutil.rmtree(d)
@@ -776,9 +1093,20 @@ def _write_run(out: Path, rows: list[dict[str, Any]], copies: list[tuple[Path, s
     with tmp.open("w", encoding="utf-8") as f:
         for row in rows:
             f.write(json.dumps(row, sort_keys=True) + "\n")
-    if (out / "traces").exists():
-        (out / "traces").rename(old)
-    staging.rename(out / "traces")
-    os.replace(tmp, out / "manifest.jsonl")
+    traces = out / "traces"
+    if traces.exists():
+        traces.rename(old)
+    try:
+        staging.rename(traces)
+        os.replace(tmp, out / "manifest.jsonl")  # the commit point: it consumes `tmp`
+    except BaseException:
+        # Put the previous traces back under the previous manifest, unless the
+        # new manifest is already in place (then the new traces belong to it).
+        committed = not tmp.exists()
+        if not committed and old.exists():
+            if traces.exists():
+                traces.rename(staging)
+            old.rename(traces)
+        raise
     if old.exists():
         shutil.rmtree(old)

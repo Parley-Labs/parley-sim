@@ -163,7 +163,7 @@ For each agent you get:
 | [Persona counterparts](docs/personas.md) | Using NeMo UserSim personas as a counterpart arm |
 | [Claim metrics](docs/claims.md) | The experimental honesty metric and how to validate it |
 
-## The bundled environment
+## The bundled environments
 
 `support_desk` is a retention negotiation. A customer wants to cancel; the
 agent can offer a discount, a service credit, a plan upgrade and billing
@@ -172,6 +172,13 @@ limits. The customer has private preferences and a walk-away value. Every
 possible deal is enumerable, so the efficient frontier and each side's best
 outcome are exact. It is deliberately small and easy to read; it exists to
 show the method, and to be replaced by yours.
+
+`meeting_scheduling` is not a negotiation over money: an assistant books a
+meeting with a contact. Each side has a private calendar and private
+preferences over the free slots; moves are propose, accept, a message only, or
+give up. The rules (no booking a busy slot) are enforced and the outcome is
+scored exactly. It shows that the method and the Harbor export are not tied
+to negotiation.
 
 ## Command line
 
@@ -183,12 +190,13 @@ show the method, and to be replaced by yours.
 | `parley-sim verify TRACE... [--env NAME]` | Replay traces through the environment and check every logged field |
 | `parley-sim harbor-export CONFIG --out DIR --wheel W \| --image I` | Experimental: write [Harbor](docs/harbor.md) tasks, one per cell |
 | `parley-sim harbor-collect JOBS... --config CONFIG --out DIR` | Experimental: gather Harbor trials into a run directory for `report` |
+| `parley-sim harbor-sweep personas\|plan\|report` | Experimental: persona sweeps over Harbor's simulated-user trials |
 | `parley-sim claims DIR --prefix P [--env NAME]` | Export a blind sample of agent claims for labelling |
+| `parley-sim kappa BLIND KEY` | Agreement between the claim rules and human labels |
 
 `--env` is needed only for an environment loaded by import path
 (`my_pkg.envs:ENTRY`): parley-sim never imports a module named inside a
 trace or run directory, so a downloaded trace can't run code.
-| `parley-sim kappa BLIND KEY` | Agreement between the claim rules and human labels |
 
 ## License
 

@@ -1,0 +1,65 @@
+# PRE-REGISTERED ANALYSIS PLAN: committed before any episode of this run exists.
+#
+# Question: when an LLM plays the counterparty, does it matter whether it plays
+# inside the parley-sim sidecar (a direct model call) or as Harbor's simulated
+# user (a Claude Code agent prompting the agent under test over Harbor's ACP
+# bridge)? If not, Harbor's simulated user can stand in for a parley-sim model
+# counterpart. The treatment is the whole channel (harness and bridge), not
+# only the model: both arms use Claude Haiku 5.5.
+#
+# Environment: meeting_scheduling (prompt version meeting-2). Data: fresh
+# seeds 2100-2159 only. Seeds 2000-2005 (the feasibility runs) are NOT pooled.
+#
+# Agent under test (the one focal model in the report): Harbor's claude-code
+# on anthropic/claude-sonnet-5-5. The `harbor-agent` lineup entry below is a
+# placeholder that harbor-export ignores.
+# Arms, one task per seed each (120 trials):
+#   aoc          haiku-contact: Claude Haiku 5.5 as the contact, in the sidecar
+#   harbor-user  Harbor's simulated user as the contact: user agent claude-code
+#                on anthropic/claude-haiku-5-5, bridge acp, given the
+#                parley-runtime MCP server (job config below)
+# The scripted arm is not run (run_arms).
+#
+# Commands (exactly):
+#   parley-sim harbor-export configs/harbor-user-study.yaml --out TASKS --image IMAGE \
+#     --harbor-user-arm harbor-user
+#   harbor run -p TASKS/<the 60 -aoc-r0 tasks> -a claude-code -m anthropic/claude-sonnet-5-5 -o JOBS
+#   harbor run -c JOB.yaml    # the 60 -harbor-user-r0 tasks; JOB.yaml has
+#     agent claude-code / anthropic/claude-sonnet-5-5 and
+#     user_agent: {name: claude-code, model_name: anthropic/claude-haiku-5-5,
+#                  bridge: {kind: acp}, mcp_servers: [{name: parley-runtime,
+#                  transport: streamable-http, url: http://parley-runtime:8000/mcp}]}
+#   parley-sim harbor-collect JOBS --config configs/harbor-user-study.yaml --out RUN
+#   parley-sim report RUN --margins focal_surplus_share=0.08,turns=0.8 --verdict-rule margin
+# Tasks whose image build fails before the episode starts are re-run; no trial
+# that reached the verifier is re-run or dropped (harbor-collect keeps the
+# earliest per task). Budget: about $10 expected; stop and report at $20.
+#
+# Verdict rule: margin ("equivalent" needs the 90% CI of the paired seed
+# difference inside +/-margin; "different" needs a 95% CI excluding 0 and
+# |delta| >= margin). Margins as equiv-sd3 and harbor-pilot: focal_surplus_share
+# 0.08, turns 0.8.
+#
+# H1 (channel equivalence), "aoc vs harbor-user": focal_surplus_share and
+#   turns both equivalent.
+# Report every verdict, including inconclusive ones. No other comparison or
+# metric is confirmatory. Exploratory, reported as such: deal rate, joint
+# efficiency, the counterpart metrics, the harbor-user arm's chat leaks
+# (harbor-collect's chat.leaks: the agent's chat replies that state a private
+# rating), and accepts whose message names a different slot from the one booked.
+run_id: harbor-user-study
+env: meeting_scheduling
+seeds: 2100:2160
+lineup:
+- {name: harbor-agent, provider: scripted, model: assistant_scripted}
+- name: haiku-contact
+  provider: anthropic
+  model: claude-haiku-5-5
+  api_key_env: PARLEY_ANTHROPIC_API_KEY
+  max_tokens: 4096
+focal_models: [harbor-agent]
+scripted_counterparts: [accommodating]
+adaptive_counterparts: [haiku-contact]
+run_arms: [aoc]
+self_null_replicates: 0
+max_refusals: 3

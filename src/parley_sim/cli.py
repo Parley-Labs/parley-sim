@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
 import sys
 import tempfile
@@ -190,12 +191,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
 def cmd_harbor_export(args: argparse.Namespace) -> int:
     """Experimental: write Harbor tasks, one per cell of a matched config's grid."""
     try:
-        from parley_sim.adapters.harbor import export_task, harbor_cells
+        from parley_sim.adapters.harbor import export_task, harbor_cells, recover_exports
     except ImportError as exc:
         print(f"harbor-export needs the harbor extra: {exc}", file=sys.stderr)
         return 2
     from parley_sim.matched import build_grid, config_hash
 
+    recover_exports(Path(args.out))  # before anything else, so a refused run still repairs one
     cfg = load_config(args.config)
     if (args.wheel is None) == (args.image is None):
         print("give exactly one of --wheel or --image", file=sys.stderr)
@@ -204,23 +206,27 @@ def cmd_harbor_export(args: argparse.Namespace) -> int:
     if wheel is not None and (not wheel.is_file() or wheel.suffix != ".whl"):
         print(f"--wheel {wheel}: not a wheel file (build one with `uv build --wheel`)", file=sys.stderr)
         return 2
-    secret = None
-    if args.seed_secret_env:
-        secret = os.environ.get(args.seed_secret_env)
-        if not secret:
-            print(f"{args.seed_secret_env} is not set", file=sys.stderr)
-            return 2
+    if args.harbor_user_replicates < 1:
+        print("--harbor-user-replicates must be at least 1", file=sys.stderr)
+        return 2
+    if args.seed_secret_env and not os.environ.get(args.seed_secret_env):
+        print(f"{args.seed_secret_env} is not set (it must also be set when running the tasks)",
+              file=sys.stderr)
+        return 2
     try:
         cells = harbor_cells(build_grid(cfg), run_id=cfg.run_id, env=cfg.env,
                              env_config=cfg.env_config, lineup=cfg.lineup,
-                             reward_metric=args.reward_metric)
+                             reward_metric=args.reward_metric,
+                             external_arm=args.harbor_user_arm,
+                             external_replicates=args.harbor_user_replicates)
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2
     chash = config_hash(cfg)
     for cell in cells:
         export_task(Path(args.out), cell, chash=chash, wheel=wheel, image=args.image,
-                    seed_secret=secret, extra_ca=Path(args.extra_ca) if args.extra_ca else None)
+                    seed_secret_env=args.seed_secret_env,
+                    extra_ca=Path(args.extra_ca) if args.extra_ca else None)
     print(f"{len(cells)} tasks in {args.out}")
     return 0
 
@@ -239,6 +245,52 @@ def cmd_harbor_collect(args: argparse.Namespace) -> int:
         return 2
     print(", ".join(f"{k}: {v}" for k, v in counts.items()))
     return 0 if counts["kept"] else 1
+
+
+def cmd_harbor_sweep(args: argparse.Namespace) -> int:
+    """Experimental: persona sweeps over Harbor's simulated-user trials."""
+    from parley_sim.adapters import harbor_sweep as hs
+
+    if args.sweep_cmd == "personas":
+        try:
+            paths = hs.write_personas(args.panel, args.out, args.n)
+        except (ImportError, ValueError) as exc:
+            print(exc, file=sys.stderr)
+            return 2
+        print(f"{len(paths)} persona files in {args.out} (they hold persona data: keep them private)")
+        return 0
+    if args.sweep_cmd == "plan":
+        personas: list[str | None] = [None] if args.include_default else []
+        for d in args.personas:
+            personas += sorted(str(p) for p in Path(d).glob("*.md"))
+        if not personas:
+            print("no personas: pass --personas DIR and/or --include-default", file=sys.stderr)
+            return 2
+        sys.stdout.write(hs.write_plan(args.tasks, personas, agent=args.agent, model=args.model,
+                                       user_agent=args.user_agent, user_model=args.user_model,
+                                       jobs=args.jobs, replicates=args.replicates))
+        return 0
+    rows = hs.collect([Path(d) for d in args.jobs], reward_key=args.reward_key)
+    if not rows:
+        print("no simulated-user trials found", file=sys.stderr)
+        return 1
+    report = hs.sweep_report(rows, baseline=args.baseline, margin=args.margin)
+    if args.json:
+        print(json.dumps(_finite_or_null(report), indent=2, default=str, allow_nan=False))
+    else:
+        print(hs.render_sweep(report), end="")
+    return 0
+
+
+def _finite_or_null(x):
+    """NaN and infinite statistics (too few tasks for an interval) as JSON null."""
+    if isinstance(x, float):
+        return x if math.isfinite(x) else None
+    if isinstance(x, dict):
+        return {k: _finite_or_null(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_finite_or_null(v) for v in x]
+    return x
 
 
 _ENV_HELP = ("environment name or import path (e.g. my_pkg.envs:ENTRY). Needed for an "
@@ -293,8 +345,14 @@ def main(argv: list[str] | None = None) -> int:
     src.add_argument("--image", help="prebuilt runtime sidecar image (see integrations/harbor)")
     h.add_argument("--reward-metric", default="focal_surplus_share",
                    help="episode metric Harbor records as the reward (default: focal_surplus_share)")
+    h.add_argument("--harbor-user-arm", metavar="ARM",
+                   help="also export an arm whose counterpart is played by Harbor's simulated user "
+                        "(run with --user-agent); its tasks' instruction is the counterpart's brief")
+    h.add_argument("--harbor-user-replicates", type=int, default=1, metavar="N",
+                   help="tasks per seed in the --harbor-user-arm arm (default 1)")
     h.add_argument("--seed-secret-env", help="environment variable holding a seed secret, for "
-                   "private exports: scenarios can't then be computed from the seed")
+                   "private exports: scenarios can't then be computed from the seed. The value "
+                   "is not written into the tasks; set the variable when running them too")
     h.add_argument("--extra-ca", help="CA certificate to trust inside the images (local builds "
                    "behind a TLS-intercepting proxy; don't use for tasks you publish)")
     h.set_defaults(func=cmd_harbor_export)
@@ -304,6 +362,30 @@ def main(argv: list[str] | None = None) -> int:
     hc.add_argument("--config", required=True, help="the config the tasks were exported from")
     hc.add_argument("--out", required=True, help="run directory to write")
     hc.set_defaults(func=cmd_harbor_collect)
+    hs = sub.add_parser("harbor-sweep",
+                        help="experimental: persona sweeps over Harbor's simulated-user trials")
+    hsub = hs.add_subparsers(dest="sweep_cmd", required=True)
+    hp = hsub.add_parser("personas", help="persona files from a UserSim panel, plus minimal.md")
+    hp.add_argument("--panel", required=True, help="UserSim panel parquet (or JSONL)")
+    hp.add_argument("--n", type=int, required=True, help="how many personas")
+    hp.add_argument("--out", required=True, help="directory for the persona files (keep private)")
+    hl = hsub.add_parser("plan", help="print a shell script of harbor runs, one per task and persona")
+    hl.add_argument("--tasks", nargs="+", required=True, help="Harbor task directories")
+    hl.add_argument("--personas", nargs="*", default=[], help="directories of persona .md files")
+    hl.add_argument("--include-default", action="store_true", help="also run Harbor's default persona")
+    hl.add_argument("--agent", required=True)
+    hl.add_argument("--model", required=True)
+    hl.add_argument("--user-agent", required=True)
+    hl.add_argument("--user-model", required=True)
+    hl.add_argument("--jobs", required=True, help="Harbor jobs directory")
+    hl.add_argument("--replicates", type=int, default=1, help="attempts per task and persona")
+    hr = hsub.add_parser("report", help="compare persona arms on the tasks' own rewards")
+    hr.add_argument("jobs", nargs="+", help="Harbor job or trial directories")
+    hr.add_argument("--baseline", default="harbor-default")
+    hr.add_argument("--margin", type=float, help="smallest delta that counts (enables verdicts)")
+    hr.add_argument("--reward-key", default="reward")
+    hr.add_argument("--json", action="store_true")
+    hs.set_defaults(func=cmd_harbor_sweep)
     args = p.parse_args(argv)
     return args.func(args)
 
