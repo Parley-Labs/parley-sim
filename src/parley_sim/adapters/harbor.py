@@ -742,6 +742,7 @@ def export_task(out: Path, cell: HarborCell, *, chash: str, wheel: Path | None =
     built from `wheel` or pulled as a prebuilt `image`. `extra_ca` adds a CA
     certificate to the images (for building behind a TLS-intercepting proxy);
     leave it unset for tasks you publish."""
+    _recover_export(out, cell.name)  # first, so a refused export still repairs one
     if (wheel is None) == (image is None):
         raise ValueError("give exactly one of wheel or image")
     for path in (wheel, extra_ca):
@@ -750,11 +751,6 @@ def export_task(out: Path, cell: HarborCell, *, chash: str, wheel: Path | None =
     cell = replace(cell, config_hash=chash)
     final = out / cell.name
     backup = out / f".{cell.name}.previous"
-    if backup.exists():  # an earlier export was interrupted mid-swap
-        if final.exists():
-            shutil.rmtree(backup)  # the swap finished; only the cleanup was missed
-        else:
-            backup.rename(final)  # it didn't: the previous task is still the task
     # Built beside the final directory and swapped in at the end, so a failed
     # export leaves an earlier export of this task usable.
     task = out / f".{cell.name}.exporting"
@@ -777,6 +773,24 @@ def export_task(out: Path, cell: HarborCell, *, chash: str, wheel: Path | None =
     if backup.exists():
         shutil.rmtree(backup)
     return final
+
+
+def _recover_export(out: Path, name: str) -> None:
+    """Finish or undo a task swap that an earlier export was killed in."""
+    final, backup = out / name, out / f".{name}.previous"
+    if not backup.is_dir():
+        return
+    if final.exists():
+        shutil.rmtree(backup)  # the swap finished; only the cleanup was missed
+    else:
+        backup.rename(final)  # it didn't: the previous task is still the task
+
+
+def recover_exports(out: Path) -> None:
+    """Repair every interrupted task swap in an export directory."""
+    if out.is_dir():
+        for backup in out.glob(".*.previous"):
+            _recover_export(out, backup.name[1:-len(".previous")])
 
 
 def _write_task(task: Path, cell: HarborCell, *, wheel: Path | None, image: str | None,

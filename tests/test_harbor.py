@@ -1010,3 +1010,23 @@ def test_the_persona_is_identified_as_it_was_when_the_trial_ran(tmp_path: Path):
     assert one["persona_digest"] == "sha256:" + "a" * 64 and one != two
     # Without a lock (older Harbor), the file as it is now.
     assert _simulated_user(user, tmp_path)["persona_digest"].startswith("sha256:")
+
+
+def test_a_refused_export_still_recovers_an_interrupted_swap(tmp_path: Path):
+    """Recovery runs before any input check, in export_task and in the CLI."""
+    cfg = config()
+    cell = cells(cfg)[0]
+    task = export_task(tmp_path / "out", cell, chash=config_hash(cfg), image="x")
+    before = (task / "task.toml").read_text()
+    backup = task.parent / f".{task.name}.previous"
+    task.rename(backup)  # killed mid-swap
+    with pytest.raises(ValueError, match="not a file"):
+        export_task(tmp_path / "out", cell, chash=config_hash(cfg), image="x",
+                    extra_ca=tmp_path / "missing.crt")
+    assert (task / "task.toml").read_text() == before and not backup.exists()
+    # The CLI refuses a bad wheel before export_task runs; it recovers first too.
+    task.rename(backup)
+    canary = str(ROOT / "configs" / "meeting-canary.yaml")
+    assert main(["harbor-export", canary, "--out", str(tmp_path / "out"),
+                 "--wheel", str(tmp_path / "nope.whl")]) == 2
+    assert (task / "task.toml").read_text() == before and not backup.exists()

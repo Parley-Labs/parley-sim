@@ -191,13 +191,14 @@ def cmd_verify(args: argparse.Namespace) -> int:
 def cmd_harbor_export(args: argparse.Namespace) -> int:
     """Experimental: write Harbor tasks, one per cell of a matched config's grid."""
     try:
-        from parley_sim.adapters.harbor import export_task, harbor_cells
+        from parley_sim.adapters.harbor import export_task, harbor_cells, recover_exports
     except ImportError as exc:
         print(f"harbor-export needs the harbor extra: {exc}", file=sys.stderr)
         return 2
     from parley_sim.matched import build_grid, config_hash
 
     cfg = load_config(args.config)
+    recover_exports(Path(args.out))  # before any check, so a refused run still repairs one
     if (args.wheel is None) == (args.image is None):
         print("give exactly one of --wheel or --image", file=sys.stderr)
         return 2
