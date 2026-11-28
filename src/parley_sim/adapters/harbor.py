@@ -923,6 +923,10 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
         counterpart = None
         if any(str(v).startswith(EXTERNAL) for v in (cell.get("seats") or {}).values()):
             counterpart = _simulated_user(trial_config.get("user_agent"))
+            if counterpart and counterpart["persona"] and counterpart["persona_digest"] is None:
+                raise ValueError(f"{trial}: can't read the simulated user's persona file "
+                                 f"({trial_config['user_agent'].get('user_persona_path')}), so its "
+                                 "persona can't be identified; collect where the persona files are")
             prior = external_arms.setdefault(cell["arm"], counterpart)
             if prior != counterpart:
                 raise ValueError(f"arm {cell['arm']!r} was played by different simulated users "

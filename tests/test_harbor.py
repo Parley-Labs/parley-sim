@@ -980,3 +980,15 @@ def test_an_export_interrupted_mid_swap_is_recovered(tmp_path: Path, monkeypatch
     with pytest.raises(OSError):
         export_task(tmp_path, cell, chash=config_hash(cfg), image="x")
     assert (task / "task.toml").read_text() == before
+
+
+def test_collect_refuses_a_persona_it_cannot_identify(tmp_path: Path):
+    """Two unreadable persona files with one name would look identical; collect
+    refuses rather than treat possibly different personas as one arm."""
+    cfg, _ = _meeting_cells(external_arm="harbor-user")
+    _external_trial(tmp_path / "job", "a", "anthropic/claude-haiku-5-5")
+    config = json.loads((tmp_path / "job" / "a" / "config.json").read_text())
+    config["user_agent"]["user_persona_path"] = str(tmp_path / "gone" / "usersim-s00.md")
+    (tmp_path / "job" / "a" / "config.json").write_text(json.dumps(config))
+    with pytest.raises(ValueError, match="can't read the simulated user's persona file"):
+        collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], tmp_path / "run")
