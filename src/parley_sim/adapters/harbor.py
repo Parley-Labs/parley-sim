@@ -922,7 +922,7 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
         # which the config hash can't cover: one arm, one simulated user.
         counterpart = None
         if any(str(v).startswith(EXTERNAL) for v in (cell.get("seats") or {}).values()):
-            counterpart = _simulated_user(trial_config.get("user_agent"))
+            counterpart = _simulated_user(trial_config.get("user_agent"), trial)
             if counterpart and counterpart["persona"] and counterpart["persona_digest"] is None:
                 raise ValueError(f"{trial}: can't read the simulated user's persona file "
                                  f"({trial_config['user_agent'].get('user_persona_path')}), so its "
@@ -990,23 +990,39 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
     return counts
 
 
-def _simulated_user(user_agent: dict[str, Any] | None) -> dict[str, Any] | None:
+def _simulated_user(user_agent: dict[str, Any] | None,
+                    trial: Path | None = None) -> dict[str, Any] | None:
     """What defines a Harbor simulated user as a counterpart: its agent, model,
-    persona file and bridge (None for a trial run without one)."""
+    persona and bridge (None for a trial run without one). The persona is
+    identified by content: the digest Harbor recorded in the trial's lock.json
+    when the trial ran, or, for a Harbor that writes none, the file as it is now.
+    The file name is kept for display."""
     if not user_agent:
         return None
     bridge = user_agent.get("bridge") or {}
     persona = user_agent.get("user_persona_path")
-    # Personas are told apart by content where the file can be read (collect
-    # usually runs where Harbor ran); the file name is kept for display.
     persona_digest = None
-    if persona and Path(persona).is_file():
-        persona_digest = hashlib.sha256(Path(persona).read_bytes()).hexdigest()[:16]
+    if persona:
+        persona_digest = _locked_persona_digest(trial)
+        if persona_digest is None and Path(persona).is_file():
+            persona_digest = "sha256:" + hashlib.sha256(Path(persona).read_bytes()).hexdigest()
     return {"agent": user_agent.get("name") or user_agent.get("import_path"),
             "model": user_agent.get("model_name"),
             "persona": Path(persona).name if persona else None,
             "persona_digest": persona_digest,
             "bridge": bridge.get("kind") if isinstance(bridge, dict) else bridge}
+
+
+def _locked_persona_digest(trial: Path | None) -> str | None:
+    """The persona digest Harbor wrote into the trial's lock.json at trial time."""
+    if trial is None:
+        return None
+    try:
+        lock = json.loads((trial / "lock.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    digest = (lock.get("user_persona") or {}).get("digest")
+    return digest if isinstance(digest, str) and digest else None
 
 
 def bridge_replies(path: Path) -> list[str] | None:

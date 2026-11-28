@@ -992,3 +992,21 @@ def test_collect_refuses_a_persona_it_cannot_identify(tmp_path: Path):
     (tmp_path / "job" / "a" / "config.json").write_text(json.dumps(config))
     with pytest.raises(ValueError, match="can't read the simulated user's persona file"):
         collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], tmp_path / "run")
+
+
+def test_the_persona_is_identified_as_it_was_when_the_trial_ran(tmp_path: Path):
+    """Harbor's lock.json records the persona digest at trial time; a persona
+    file edited afterwards doesn't change the trial's identity."""
+    from parley_sim.adapters.harbor import _simulated_user
+
+    persona = tmp_path / "usersim-s00.md"
+    persona.write_text("edited after the trial")
+    user = {"name": "claude-code", "model_name": "m", "user_persona_path": str(persona)}
+    for name, digest in (("t1", "sha256:" + "a" * 64), ("t2", "sha256:" + "b" * 64)):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "lock.json").write_text(json.dumps(
+            {"user_persona": {"path": str(persona), "digest": digest}}))
+    one, two = _simulated_user(user, tmp_path / "t1"), _simulated_user(user, tmp_path / "t2")
+    assert one["persona_digest"] == "sha256:" + "a" * 64 and one != two
+    # Without a lock (older Harbor), the file as it is now.
+    assert _simulated_user(user, tmp_path)["persona_digest"].startswith("sha256:")
