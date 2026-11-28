@@ -38,3 +38,4 @@ Diversity (spread across seeds; opening-message variety):
 | aoc | +0.233 | +1.525 | +0.034 | +0.136 | 60 |
 
 aoc vs harbor-user: sd_focal_surplus_share -0.028 [-0.081, +0.026]; sd_turns +0.240 [-0.046, +0.502]; sd_cp_first_offer_share +0.034 [+0.020, +0.044]; opening_distinct2 -0.049 (p=0.004, n=59)
+
