@@ -121,12 +121,14 @@ def collect(job_dirs: list[str | Path], reward_key: str = "reward") -> list[dict
             trial = result_path.parent
             config_path = trial / "config.json"
             if not config_path.exists():
-                continue  # a job-level result.json
+                continue
             config = json.loads(config_path.read_text())
+            result = json.loads(result_path.read_text())
+            if not _is_trial(config, result):
+                continue  # the job directory's own config.json and result.json
             user = config.get("user_agent")
             if not user:
                 continue
-            result = json.loads(result_path.read_text())
             rewards = (result.get("verifier_result") or {}).get("rewards") or {}
             reward = rewards.get(reward_key)
             if reward is None and reward_key == "reward" and len(rewards) == 1:
@@ -142,6 +144,15 @@ def collect(job_dirs: list[str | Path], reward_key: str = "reward") -> list[dict
                          "exception": bool(result.get("exception_info")),
                          "trial": str(trial)})
     return rows
+
+
+def _is_trial(config: dict[str, Any], result: dict[str, Any]) -> bool:
+    """A trial's files, not a job's: Harbor writes config.json and result.json
+    at the job root too (a JobConfig, with `job_name` and possibly a
+    `user_agent`, and a JobResult listing `trial_results`)."""
+    if "trial_results" in result or "n_total_trials" in result or "job_name" in config:
+        return False
+    return "task" in config and ("trial_name" in result or "task_name" in result)
 
 
 def sweep_report(rows: list[dict[str, Any]], baseline: str = DEFAULT_ARM,

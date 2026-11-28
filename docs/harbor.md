@@ -137,6 +137,12 @@ Caveats:
   `meeting_scheduling` a leak is a private slot rating stated as a number.
   The log format is the ACP client's session export; the parser follows what
   Harbor 0.27 wrote, so check the counts on a new Harbor version.
+- **One simulated user per arm.** Harbor's `user_agent` settings pick the
+  counterparty, outside the config hash. `harbor-collect` records them (agent,
+  model, persona file name, bridge) as the arm's definition and refuses to mix
+  trials of one arm played by different simulated users; `report` refuses to
+  join runs whose arm of the same name was played differently. To compare
+  simulated users, export each as its own arm (`--harbor-user-arm NAME`).
 - **Usage figures.** In these trials, Harbor's per-trial usage (`agent_result`)
   is the simulated user's, not the agent under test's; read the agent's usage
   from its own logs.

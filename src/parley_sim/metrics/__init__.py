@@ -131,6 +131,8 @@ def _arm_definition(config: dict[str, Any], arm: str) -> Any:
     lineup specs of its members for model arms."""
     if arm == "soc":
         return list(config["scripted_counterparts"])  # order sets the rotation across seeds
+    if arm in (config.get("external_arms") or {}):  # played from outside, e.g. a Harbor simulated user
+        return {"external": config["external_arms"][arm]}
     members = (config.get("extra_arms") or {}).get(arm) if arm != "aoc" \
         else config["adaptive_counterparts"]
     lineup = {m["name"]: m for m in config["lineup"]}

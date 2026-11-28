@@ -883,6 +883,7 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
     persona_digest = None
     copies: list[tuple[Path, str]] = []  # written only once every trial has been checked
     slugs: dict[str, tuple[Any, Any]] = {}  # focal model name -> (agent, model) it stands for
+    external_arms: dict[str, Any] = {}  # arm played from outside -> the simulated user that played it
     for trial in trials:
         counts["trials"] += 1
         result = json.loads((trial / "verifier" / "result.json").read_text())
@@ -903,6 +904,15 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
                 raise ValueError(f"{trial} used a different persona panel from earlier trials of "
                                  f"this config; collect each panel's jobs separately")
             persona_digest = digest_here
+        # An arm played from outside is defined by the simulated user Harbor ran,
+        # which the config hash can't cover: one arm, one simulated user.
+        counterpart = None
+        if any(str(v).startswith(EXTERNAL) for v in (cell.get("seats") or {}).values()):
+            counterpart = _simulated_user(trial_config.get("user_agent"))
+            prior = external_arms.setdefault(cell["arm"], counterpart)
+            if prior != counterpart:
+                raise ValueError(f"arm {cell['arm']!r} was played by different simulated users "
+                                 f"({prior} and {counterpart}); collect them separately")
         agent = trial_config.get("agent") or {}
         identity = (agent.get("name") or agent.get("import_path"), agent.get("model_name"))
         focal = _focal_name(agent)
@@ -927,6 +937,8 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
                      "replicate": cell["replicate"], "seats": cell.get("seats") or {},
                      "status": "done" if done else "errored", "trace": trace_rel if done else None,
                      "usage": _usage(lines), "harbor_trial": str(trial)}
+        if counterpart is not None:
+            rows[key]["counterpart"] = counterpart
         if not done:
             rows[key]["error"] = "; ".join(result.get("problems") or []) or "not completed"
         replies = bridge_replies(trial / "agent" / "bridge-trajectory.json")
@@ -946,6 +958,8 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
     config = json.loads(json.dumps(config))
     config["lineup"] = [*config["lineup"], *focals.values()]
     config["focal_models"] = sorted(focals)
+    if external_arms:
+        config["external_arms"] = external_arms  # read by the report as these arms' definitions
     run = {"type": "run", "run_id": f"{run_id}-harbor", "config_hash": chash, "config": config,
            "source": "harbor"}
     if persona_digest:
@@ -953,6 +967,19 @@ def collect_jobs(config: dict[str, Any], chash: str, job_dirs: list[Path], out: 
     if rows:  # an empty collection (e.g. the wrong config) leaves an existing run alone
         _write_run(out, [run, *rows.values()], copies)
     return counts
+
+
+def _simulated_user(user_agent: dict[str, Any] | None) -> dict[str, Any] | None:
+    """What defines a Harbor simulated user as a counterpart: its agent, model,
+    persona file and bridge (None for a trial run without one)."""
+    if not user_agent:
+        return None
+    bridge = user_agent.get("bridge") or {}
+    persona = user_agent.get("user_persona_path")
+    return {"agent": user_agent.get("name") or user_agent.get("import_path"),
+            "model": user_agent.get("model_name"),
+            "persona": Path(persona).name if persona else None,
+            "bridge": bridge.get("kind") if isinstance(bridge, dict) else bridge}
 
 
 def bridge_replies(path: Path) -> list[str] | None:

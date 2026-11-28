@@ -840,3 +840,49 @@ def test_collect_recovers_from_an_interrupted_publish(tmp_path: Path):
     assert collect_jobs(other.model_dump(), config_hash(other), [tmp_path / "job"], out)["kept"] == 0
     assert sorted(p.name for p in (out / "traces").iterdir()) == traces
     assert (out / "manifest.jsonl").read_text() == manifest
+
+
+def _external_trial(job: Path, name: str, user_model: str, seed_index: int = 0) -> None:
+    """A finished harbor-user trial: the contact (played from outside) proposes
+    a mutual slot and the assistant accepts it."""
+    from parley_sim.envs import meeting as mt
+
+    _, hc = _meeting_cells(external_arm="harbor-user")
+    cell = [c for c in hc if c.arm == "harbor-user"][seed_index]
+    rt = HarborRuntime(RuntimeConfig(cell=cell, token=TOKEN, counterpart_token="c" * 24))
+    asyncio.run(rt.start(mt.CONTACT))
+    inst = rt.episode.state.inst
+    slot = sorted(set(inst.free[mt.ASSISTANT]) & set(inst.free[mt.CONTACT]))[0]
+    asyncio.run(rt.take_turn({"message": "Hi", "move": {"type": "propose", "slot": slot}}, mt.CONTACT))
+    asyncio.run(rt.take_turn({"message": "Done", "move": {"type": "accept"}}))
+    result = rt.result()
+    assert result["completed"] == 1 and result["verified"] == 1
+    _fake_trial(job, name, {"name": "claude-code", "model_name": "anthropic/x"}, result,
+                f"2026-11-28T00:0{len(list(job.iterdir())) if job.exists() else 0}:00")
+    config = json.loads((job / name / "config.json").read_text())
+    config["user_agent"] = {"name": "claude-code", "model_name": user_model, "bridge": {"kind": "acp"}}
+    (job / name / "config.json").write_text(json.dumps(config))
+
+
+def test_collect_records_and_checks_the_simulated_user_of_an_external_arm(tmp_path: Path):
+    cfg, _ = _meeting_cells(external_arm="harbor-user")
+    _external_trial(tmp_path / "job", "a", "anthropic/claude-haiku-5-5")
+    counts = collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], tmp_path / "run")
+    rows = [json.loads(l) for l in (tmp_path / "run" / "manifest.jsonl").read_text().splitlines()]
+    user = {"agent": "claude-code", "model": "anthropic/claude-haiku-5-5", "persona": None, "bridge": "acp"}
+    assert counts["kept"] == 1 and rows[1]["counterpart"] == user
+    assert rows[0]["config"]["external_arms"] == {"harbor-user": user}
+    # Same cell and agent, another simulated user model: refused, not deduplicated away.
+    _external_trial(tmp_path / "job", "b", "other/model")
+    with pytest.raises(ValueError, match="different simulated users"):
+        collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], tmp_path / "run2")
+
+
+def test_report_refuses_one_external_arm_played_by_different_simulated_users(tmp_path: Path):
+    cfg, _ = _meeting_cells(external_arm="harbor-user")
+    _external_trial(tmp_path / "j1", "a", "anthropic/claude-haiku-5-5", seed_index=0)
+    _external_trial(tmp_path / "j2", "b", "other/model", seed_index=1)
+    for j in ("j1", "j2"):
+        collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / j], tmp_path / f"run-{j}")
+    with pytest.raises(ValueError, match="arm 'harbor-user' is defined differently"):
+        build_report(tmp_path / "run-j1", tmp_path / "run-j2")

@@ -22,7 +22,8 @@ def _trial(root: Path, name: str, *, task: str, persona: str | None, reward: flo
                        "user_persona_path": persona}}))
     rewards = None if reward is None else {reward_name: reward}
     (t / "result.json").write_text(json.dumps({
-        "task_name": task, "verifier_result": None if rewards is None else {"rewards": rewards},
+        "task_name": task, "trial_name": name,
+        "verifier_result": None if rewards is None else {"rewards": rewards},
         "exception_info": None if reward is not None else {"exception_type": "AgentTimeoutError"}}))
 
 
@@ -158,3 +159,21 @@ def test_cli_json_report_is_strict_json_for_small_sweeps(tmp_path: Path, capsys)
     out = capsys.readouterr().out
     report = json.loads(out, parse_constant=lambda c: pytest.fail(f"non-standard JSON {c}"))
     assert report["groups"][0]["comparisons"][0]["ci95"] == [None, None]
+
+
+def test_job_level_files_are_not_trials(tmp_path: Path):
+    """Harbor writes config.json and result.json at the job root as well; the
+    job config has a user_agent too, so it must not be read as a trial."""
+    job = tmp_path / "job"
+    _trial(job, "t0", task="a", persona=None, reward=1.0)
+    (job / "config.json").write_text(json.dumps({
+        "job_name": "2026-11-28__00-00-00", "n_attempts": 1,
+        "agent": {"name": "claude-code", "model_name": "anthropic/claude-sonnet-5-5"},
+        "user_agent": {"name": "claude-code", "model_name": "anthropic/claude-haiku-5-5"},
+        "tasks": [{"path": "tasks/a"}]}))
+    (job / "result.json").write_text(json.dumps({
+        "id": "x", "started_at": "2026-11-28T00:00:00", "n_total_trials": 1, "stats": {},
+        "trial_results": [{"task_name": "a", "trial_name": "t0"}]}))
+    rows = hs.collect([job])
+    assert [r["task"] for r in rows] == ["a"]
+    assert len(hs.sweep_report(rows)["groups"]) == 1
