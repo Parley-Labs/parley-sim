@@ -749,6 +749,12 @@ def export_task(out: Path, cell: HarborCell, *, chash: str, wheel: Path | None =
             raise ValueError(f"not a file: {path}")
     cell = replace(cell, config_hash=chash)
     final = out / cell.name
+    backup = out / f".{cell.name}.previous"
+    if backup.exists():  # an earlier export was interrupted mid-swap
+        if final.exists():
+            shutil.rmtree(backup)  # the swap finished; only the cleanup was missed
+        else:
+            backup.rename(final)  # it didn't: the previous task is still the task
     # Built beside the final directory and swapped in at the end, so a failed
     # export leaves an earlier export of this task usable.
     task = out / f".{cell.name}.exporting"
@@ -760,9 +766,6 @@ def export_task(out: Path, cell: HarborCell, *, chash: str, wheel: Path | None =
     except BaseException:
         shutil.rmtree(task, ignore_errors=True)
         raise
-    backup = out / f".{cell.name}.previous"
-    if backup.exists():
-        shutil.rmtree(backup)
     if final.exists():
         final.rename(backup)
     try:

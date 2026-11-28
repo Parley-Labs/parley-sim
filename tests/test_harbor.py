@@ -959,3 +959,24 @@ def test_an_error_after_the_manifest_commit_keeps_the_new_traces(tmp_path: Path,
         collect_jobs(cfg.model_dump(), config_hash(cfg), [tmp_path / "job"], out)
     rows = [json.loads(l) for l in (out / "manifest.jsonl").read_text().splitlines()][1:]
     assert sorted(Path(r["trace"]).name for r in rows) == sorted(p.name for p in (out / "traces").iterdir())
+
+
+def test_an_export_interrupted_mid_swap_is_recovered(tmp_path: Path, monkeypatch):
+    """Killed after moving the old task aside: the next export puts it back
+    first, so a failure in that export still leaves the previous task."""
+    cfg = config()
+    cell = cells(cfg)[0]
+    task = export_task(tmp_path, cell, chash=config_hash(cfg), image="x")
+    before = (task / "task.toml").read_text()
+    task.rename(tmp_path / f".{task.name}.previous")  # the interrupted swap
+    real = Path.rename
+
+    def flaky(self, target):
+        if Path(target) == task and self.name.endswith(".exporting"):
+            raise OSError("interrupted again")
+        return real(self, target)
+
+    monkeypatch.setattr(Path, "rename", flaky)
+    with pytest.raises(OSError):
+        export_task(tmp_path, cell, chash=config_hash(cfg), image="x")
+    assert (task / "task.toml").read_text() == before
